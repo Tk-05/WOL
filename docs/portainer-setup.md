@@ -34,6 +34,13 @@ either:
 - as a **Repository** stack instead of Web editor, if this project lives in a
   git repo — Portainer clones it and has the build context available.
 
+**If you use a Repository stack:** Portainer only clones the repo once, at
+stack creation. A plain "Update the stack" does **not** fetch new commits —
+it redeploys whatever was cloned initially. To pick up a newer commit (e.g.
+after pulling a fix into this project), use the stack's **"Pull and
+redeploy"** action (not the plain update button), or delete and recreate the
+stack against the same repo URL to force a fresh clone.
+
 ## 3. Fill in the environment variables
 
 **Important:** Portainer's stack-level "Environment variables" section only

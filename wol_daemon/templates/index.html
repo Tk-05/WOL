@@ -3,33 +3,197 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>WOL-Daemon</title>
+<title>WOL Daemon</title>
 <style>
-  :root { color-scheme: light dark; }
-  body { font-family: system-ui, sans-serif; max-width: 760px; margin: 2rem auto; padding: 0 1rem; line-height: 1.4; }
-  h1 { font-size: 1.4rem; }
-  h2 { font-size: 1.1rem; margin-top: 2rem; }
-  .status { display: inline-block; padding: 0.15rem 0.6rem; border-radius: 999px; font-weight: 600; font-size: 0.85rem; }
-  .status.up { background: #1f8a3b22; color: #1f8a3b; }
-  .status.down { background: #c0392b22; color: #c0392b; }
-  .card { border: 1px solid #8884; border-radius: 8px; padding: 1rem; margin-bottom: 1rem; }
-  table { width: 100%; border-collapse: collapse; }
-  th, td { text-align: left; padding: 0.4rem 0.3rem; border-bottom: 1px solid #8883; font-size: 0.92rem; }
+  :root {
+    color-scheme: light dark;
+    --bg: #f5f6f8;
+    --surface: #ffffff;
+    --border: #e3e5e9;
+    --text: #1a1d23;
+    --text-muted: #6b7280;
+    --primary: #2563eb;
+    --primary-hover: #1d4ed8;
+    --primary-contrast: #ffffff;
+    --success-bg: #ecfdf3;
+    --success-text: #027a48;
+    --danger: #dc2626;
+    --danger-hover: #b91c1c;
+    --danger-bg: #fef3f2;
+    --danger-text: #b42318;
+    --chip-bg: #eef0f3;
+    --log-bg: #12141a;
+    --log-text: #d7dae0;
+    --radius: 12px;
+    --radius-sm: 8px;
+    --shadow: 0 1px 2px rgba(16, 24, 40, 0.04), 0 1px 8px rgba(16, 24, 40, 0.05);
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0d0f13;
+      --surface: #181b21;
+      --border: #2b2f38;
+      --text: #e7e9ec;
+      --text-muted: #9aa1ac;
+      --primary: #3b82f6;
+      --primary-hover: #60a5fa;
+      --primary-contrast: #0d0f13;
+      --success-bg: #0d2818;
+      --success-text: #4ade80;
+      --danger: #ef4444;
+      --danger-hover: #f87171;
+      --danger-bg: #2a1315;
+      --danger-text: #f87171;
+      --chip-bg: #22262e;
+      --log-bg: #06070a;
+      --log-text: #c7cbd2;
+      --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 4px 16px rgba(0, 0, 0, 0.3);
+    }
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    font-family: -apple-system, "Segoe UI", system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    max-width: 840px;
+    margin: 0 auto;
+    padding: 2.5rem 1.25rem 4rem;
+    line-height: 1.5;
+  }
+
+  header { margin-bottom: 1.75rem; }
+  h1 { font-size: 1.5rem; font-weight: 650; margin: 0 0 0.2rem; letter-spacing: -0.01em; }
+  header p { margin: 0; color: var(--text-muted); font-size: 0.9rem; }
+
+  h2 {
+    font-size: 0.78rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-muted);
+    margin: 2.25rem 0 0.75rem;
+  }
+  h2:first-of-type { margin-top: 0; }
+
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    padding: 1.25rem 1.4rem;
+  }
+
+  .status-row { display: flex; align-items: center; gap: 0.55rem; margin-bottom: 1.1rem; }
+  .status-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--danger); flex-shrink: 0; }
+  .status-dot.up { background: #22c55e; box-shadow: 0 0 0 3px var(--success-bg); }
+  .status-dot.down { background: var(--danger); box-shadow: 0 0 0 3px var(--danger-bg); }
+  .status-text { font-weight: 600; font-size: 1.02rem; }
+
+  .meta-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.9rem; margin-bottom: 1.25rem; }
+  .meta-grid dt { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); margin-bottom: 0.15rem; }
+  .meta-grid dd { margin: 0; font-size: 0.92rem; }
+  @media (max-width: 520px) { .meta-grid { grid-template-columns: 1fr; } }
+
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    font: inherit;
+    font-weight: 600;
+    font-size: 0.85rem;
+    padding: 0.5rem 0.95rem;
+    border-radius: var(--radius-sm);
+    border: 1px solid transparent;
+    cursor: pointer;
+    transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+  }
+  .btn-primary { background: var(--primary); color: var(--primary-contrast); }
+  .btn-primary:hover { background: var(--primary-hover); }
+  .btn-outline { background: transparent; border-color: var(--border); color: var(--text); }
+  .btn-outline:hover { border-color: var(--text-muted); }
+  .btn-outline-danger { background: transparent; border-color: var(--border); color: var(--danger-text); }
+  .btn-outline-danger:hover { border-color: var(--danger); background: var(--danger-bg); }
+  .btn-sm { padding: 0.32rem 0.7rem; font-size: 0.78rem; }
   form.inline { display: inline; }
-  .actions button { margin-right: 0.5rem; }
-  .flash { padding: 0.5rem 0.8rem; border-radius: 6px; margin-bottom: 0.8rem; font-size: 0.9rem; }
-  .flash.success { background: #1f8a3b22; color: #1f8a3b; }
-  .flash.error { background: #c0392b22; color: #c0392b; }
-  .days label { margin-right: 0.6rem; font-size: 0.9rem; }
-  .add-form { display: flex; flex-wrap: wrap; gap: 0.6rem; align-items: end; }
-  .add-form > div { display: flex; flex-direction: column; font-size: 0.85rem; }
-  input, select { padding: 0.3rem; }
-  .log { font-family: ui-monospace, monospace; font-size: 0.8rem; max-height: 220px; overflow-y: auto; background: #8881; padding: 0.6rem; border-radius: 6px; }
-  small.muted { color: #888; }
+  .actions-row { display: flex; gap: 0.6rem; flex-wrap: wrap; }
+
+  .flash { padding: 0.6rem 0.9rem; border-radius: var(--radius-sm); margin-bottom: 0.9rem; font-size: 0.88rem; font-weight: 500; border: 1px solid transparent; }
+  .flash.success { background: var(--success-bg); color: var(--success-text); border-color: currentColor; }
+  .flash.error { background: var(--danger-bg); color: var(--danger-text); border-color: currentColor; }
+
+  .table-wrap { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); overflow: hidden; }
+  table { width: 100%; border-collapse: collapse; }
+  th { text-align: left; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); font-weight: 600; padding: 0.7rem 1rem; border-bottom: 1px solid var(--border); }
+  td { padding: 0.7rem 1rem; border-bottom: 1px solid var(--border); font-size: 0.9rem; vertical-align: top; }
+  tbody tr:last-child td { border-bottom: none; }
+  .badge { display: inline-block; padding: 0.1rem 0.55rem; border-radius: 999px; font-size: 0.76rem; font-weight: 600; }
+  .badge.on { background: var(--success-bg); color: var(--success-text); }
+  .badge.off { background: var(--chip-bg); color: var(--text-muted); }
+
+  details > summary { cursor: pointer; list-style: none; }
+  details > summary::-webkit-details-marker { display: none; }
+  details[open] summary { margin-bottom: 0.75rem; }
+  .edit-panel { background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 0.9rem; margin-top: 0.5rem; }
+  .edit-panel .field-row { display: flex; flex-wrap: wrap; gap: 0.6rem; align-items: center; margin-top: 0.6rem; }
+
+  label.field-label { display: block; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); margin-bottom: 0.3rem; }
+
+  input[type="text"], input[type="time"], select {
+    font: inherit;
+    font-size: 0.88rem;
+    padding: 0.42rem 0.6rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--surface);
+    color: var(--text);
+  }
+  input[type="text"]:focus, input[type="time"]:focus, select:focus {
+    outline: 2px solid var(--primary);
+    outline-offset: 1px;
+  }
+
+  .day-picker { display: flex; flex-wrap: wrap; gap: 0.35rem; }
+  .day-chip { position: relative; }
+  .day-chip input { position: absolute; opacity: 0; width: 100%; height: 100%; margin: 0; cursor: pointer; }
+  .day-chip span {
+    display: inline-block;
+    padding: 0.32rem 0.65rem;
+    border-radius: 999px;
+    background: var(--chip-bg);
+    color: var(--text-muted);
+    font-size: 0.8rem;
+    font-weight: 600;
+    user-select: none;
+  }
+  .day-chip:has(input:checked) span { background: var(--primary); color: var(--primary-contrast); }
+  .day-chip:has(input:focus-visible) span { outline: 2px solid var(--primary); outline-offset: 1px; }
+
+  .add-form { display: flex; flex-wrap: wrap; gap: 1rem; align-items: end; }
+  .add-form > div { display: flex; flex-direction: column; }
+
+  .log {
+    font-family: ui-monospace, "SF Mono", Consolas, monospace;
+    font-size: 0.78rem;
+    max-height: 240px;
+    overflow-y: auto;
+    background: var(--log-bg);
+    color: var(--log-text);
+    padding: 0.9rem 1rem;
+    border-radius: var(--radius);
+    line-height: 1.7;
+  }
+
+  .muted { color: var(--text-muted); }
 </style>
 </head>
 <body>
-  <h1>WOL-Daemon — {{ target.ip_address }}</h1>
+  <header>
+    <h1>WOL Daemon</h1>
+    <p>Target: {{ target.ip_address }} ({{ target.mac_address }})</p>
+  </header>
 
   {% with messages = get_flashed_messages(with_categories=true) %}
     {% for category, message in messages %}
@@ -38,86 +202,115 @@
   {% endwith %}
 
   <div class="card">
-    <p>Status: <span class="status {{ 'up' if host_up else 'down' }}">{{ 'Online' if host_up else 'Offline' }}</span></p>
-    <p>Last action: {{ last_action or 'none yet' }}</p>
-    <p>Next scheduled action: {% if next_action %}{{ next_action[0] }} — {{ next_action[1] }}{% else %}no rules{% endif %}</p>
-    <form class="inline" method="post" action="{{ url_for('action_on') }}">
-      <button type="submit">Wake now</button>
-    </form>
-    <form class="inline" method="post" action="{{ url_for('action_off') }}">
-      <button type="submit">Shut down now</button>
-    </form>
+    <div class="status-row">
+      <span class="status-dot {{ 'up' if host_up else 'down' }}"></span>
+      <span class="status-text">{{ 'Online' if host_up else 'Offline' }}</span>
+    </div>
+    <dl class="meta-grid">
+      <div>
+        <dt>Last action</dt>
+        <dd>{{ last_action or 'none yet' }}</dd>
+      </div>
+      <div>
+        <dt>Next scheduled action</dt>
+        <dd>{% if next_action %}{{ next_action[0] }} — {{ next_action[1] }}{% else %}no rules{% endif %}</dd>
+      </div>
+    </dl>
+    <div class="actions-row">
+      <form class="inline" method="post" action="{{ url_for('action_on') }}">
+        <button type="submit" class="btn btn-primary">Wake now</button>
+      </form>
+      <form class="inline" method="post" action="{{ url_for('action_off') }}">
+        <button type="submit" class="btn btn-outline-danger">Shut down now</button>
+      </form>
+    </div>
   </div>
 
   <h2>Schedule</h2>
-  <table>
-    <thead><tr><th>Name</th><th>Days</th><th>Time</th><th>Action</th><th></th></tr></thead>
-    <tbody>
-      {% for rule in schedule %}
-      <tr>
-        <td>{{ rule.name }}</td>
-        <td>{{ rule.days_str }}</td>
-        <td>{{ rule.time }}</td>
-        <td>{{ 'On' if rule.action == 'on' else 'Off' }}</td>
-        <td class="actions">
-          <details>
-            <summary>Edit</summary>
-            <form method="post" action="{{ url_for('schedule_edit', index=rule.index) }}">
-              <div><input type="text" name="name" value="{{ rule.name }}" placeholder="Name"></div>
-              <div class="days">
-                {% for code, label in day_options %}
-                <label><input type="checkbox" name="days" value="{{ code }}" {{ 'checked' if code in rule.days else '' }}>{{ label }}</label>
-                {% endfor %}
-              </div>
-              <div>
-                <input type="time" name="time" value="{{ rule.time }}" required>
-                <select name="action">
-                  <option value="on" {{ 'selected' if rule.action == 'on' else '' }}>On</option>
-                  <option value="off" {{ 'selected' if rule.action == 'off' else '' }}>Off</option>
-                </select>
-                <button type="submit">Save</button>
-              </div>
-            </form>
-          </details>
-          <form class="inline" method="post" action="{{ url_for('schedule_delete', index=rule.index) }}" onsubmit="return confirm('Really delete this rule?')">
-            <button type="submit">Delete</button>
-          </form>
-        </td>
-      </tr>
-      {% else %}
-      <tr><td colspan="5"><small class="muted">No rules created yet</small></td></tr>
-      {% endfor %}
-    </tbody>
-  </table>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Name</th><th>Days</th><th>Time</th><th>Action</th><th></th></tr></thead>
+      <tbody>
+        {% for rule in schedule %}
+        <tr>
+          <td>{{ rule.name }}</td>
+          <td class="muted">{{ rule.days_str }}</td>
+          <td>{{ rule.time }}</td>
+          <td><span class="badge {{ rule.action }}">{{ 'On' if rule.action == 'on' else 'Off' }}</span></td>
+          <td>
+            <div class="actions-row">
+              <details>
+                <summary><span class="btn btn-outline btn-sm">Edit</span></summary>
+                <div class="edit-panel">
+                  <form method="post" action="{{ url_for('schedule_edit', index=rule.index) }}">
+                    <div>
+                      <label class="field-label">Name</label>
+                      <input type="text" name="name" value="{{ rule.name }}" placeholder="Name">
+                    </div>
+                    <div class="field-row">
+                      <div class="day-picker">
+                        {% for code, label in day_options %}
+                        <label class="day-chip"><input type="checkbox" name="days" value="{{ code }}" {{ 'checked' if code in rule.days else '' }}><span>{{ label }}</span></label>
+                        {% endfor %}
+                      </div>
+                    </div>
+                    <div class="field-row">
+                      <input type="time" name="time" value="{{ rule.time }}" required>
+                      <select name="action">
+                        <option value="on" {{ 'selected' if rule.action == 'on' else '' }}>On</option>
+                        <option value="off" {{ 'selected' if rule.action == 'off' else '' }}>Off</option>
+                      </select>
+                      <button type="submit" class="btn btn-primary btn-sm">Save</button>
+                    </div>
+                  </form>
+                </div>
+              </details>
+              <form class="inline" method="post" action="{{ url_for('schedule_delete', index=rule.index) }}" onsubmit="return confirm('Really delete this rule?')">
+                <button type="submit" class="btn btn-outline-danger btn-sm">Delete</button>
+              </form>
+            </div>
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="5"><small class="muted">No rules created yet</small></td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
 
   <h2>New rule</h2>
-  <form class="add-form" method="post" action="{{ url_for('schedule_add') }}">
-    <div>
-      <label>Name</label>
-      <input type="text" name="name" placeholder="e.g. Weekdays on">
-    </div>
-    <div class="days">
-      {% for code, label in day_options %}
-      <label><input type="checkbox" name="days" value="{{ code }}">{{ label }}</label>
-      {% endfor %}
-    </div>
-    <div>
-      <label>Time</label>
-      <input type="time" name="time" required>
-    </div>
-    <div>
-      <label>Action</label>
-      <select name="action">
-        <option value="on">On</option>
-        <option value="off">Off</option>
-      </select>
-    </div>
-    <div><button type="submit">Add</button></div>
-  </form>
+  <div class="card">
+    <form class="add-form" method="post" action="{{ url_for('schedule_add') }}">
+      <div>
+        <label class="field-label">Name</label>
+        <input type="text" name="name" placeholder="e.g. Weekdays on">
+      </div>
+      <div>
+        <label class="field-label">Days</label>
+        <div class="day-picker">
+          {% for code, label in day_options %}
+          <label class="day-chip"><input type="checkbox" name="days" value="{{ code }}"><span>{{ label }}</span></label>
+          {% endfor %}
+        </div>
+      </div>
+      <div>
+        <label class="field-label">Time</label>
+        <input type="time" name="time" required>
+      </div>
+      <div>
+        <label class="field-label">Action</label>
+        <select name="action">
+          <option value="on">On</option>
+          <option value="off">Off</option>
+        </select>
+      </div>
+      <div><button type="submit" class="btn btn-primary">Add</button></div>
+    </form>
+  </div>
 
   <h2>Event log</h2>
   <div class="log">
-    {% for line in events %}{{ line }}<br>{% else %}<small class="muted">no events yet</small>{% endfor %}
+    {% for line in events %}{{ line }}<br>{% else %}<span class="muted">no events yet</span>{% endfor %}
   </div>
 </body>
 </html>

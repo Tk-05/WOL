@@ -94,20 +94,27 @@ static IP directly in `/etc/network/interfaces` on the Proxmox side.
 
 Don't reuse a root token for this — a leaked or misused root token can do
 anything, but the daemon only ever needs to power the node on/off. Create a
-dedicated user with a role scoped to exactly that:
+dedicated user with a role scoped to exactly that, and grant the role to the
+**user**, not the token:
 
 ```sh
 pveum role add WOLPowerMgmt -privs "Sys.PowerMgmt"
 pveum user add wol-daemon@pve --comment "WOL daemon service account"
-pveum user token add wol-daemon@pve wol-daemon --privsep 1
+pveum acl modify /nodes/<node-name> --users wol-daemon@pve --roles WOLPowerMgmt
+pveum user token add wol-daemon@pve wol-daemon --privsep 0
 ```
 
-The token secret is printed once at creation — copy it immediately, it can't be
-retrieved again later. Then grant the role on the node:
+`--privsep 0` matters here: with privilege separation *enabled* (the default,
+`--privsep 1`), a token's effective permissions are the *intersection* of the
+user's own ACLs and the token's own ACLs — so if you grant the role only to
+the token (as an earlier version of this guide did) while the user itself has
+none, the intersection is empty and every API call fails with 403, silently.
+With `--privsep 0` the token simply inherits whatever the user has, which is
+exactly this one role and nothing more, so there's no separate ACL to keep in
+sync and no way for the two to drift apart.
 
-```sh
-pveum acl modify /nodes/<node-name> --token 'wol-daemon@pve!wol-daemon' --roles WOLPowerMgmt
-```
+The token secret is printed once at creation — copy it immediately, it can't
+be retrieved again later.
 
 Fill the result into `config.yaml`:
 
