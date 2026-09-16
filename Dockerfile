@@ -13,10 +13,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY wol_daemon ./wol_daemon
 
-EXPOSE 8080
+EXPOSE 9090
 VOLUME ["/config"]
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8080/', timeout=3).status==200 else 1)"
+    CMD python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9090/', timeout=3).status==200 else 1)"
 
 CMD ["python", "-m", "wol_daemon.daemon", "/config/config.yaml"]

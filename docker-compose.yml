@@ -9,6 +9,27 @@ services:
     # Over the Docker bridge (default network), the broadcast would never make it past the
     # virtual switch. Only works on Linux (Pi), not with Docker Desktop on Mac/Windows.
     network_mode: host
+    # Fill these in via Portainer's "Environment variables" section rather than editing this
+    # file. The ${VAR:-default} syntax is required, not a literal value: it's what makes
+    # Portainer's env var table actually substitute into the container — a hardcoded value
+    # here would silently ignore whatever you set in Portainer's UI. See docs/portainer-setup.md.
+    environment:
+      WOL_PROXMOX_HOST: "${WOL_PROXMOX_HOST:-}"
+      WOL_PROXMOX_NODE: "${WOL_PROXMOX_NODE:-}"
+      WOL_PROXMOX_TOKEN_ID: "${WOL_PROXMOX_TOKEN_ID:-}"
+      WOL_PROXMOX_TOKEN_SECRET: "${WOL_PROXMOX_TOKEN_SECRET:-}"
+      WOL_PROXMOX_VERIFY_SSL: "${WOL_PROXMOX_VERIFY_SSL:-false}"
+      WOL_TARGET_MAC: "${WOL_TARGET_MAC:-}"
+      WOL_TARGET_IP: "${WOL_TARGET_IP:-}"
+      WOL_STATUS_TIMEOUT_SECONDS: "${WOL_STATUS_TIMEOUT_SECONDS:-5}"
+      WOL_VERIFY_AFTER_SECONDS: "${WOL_VERIFY_AFTER_SECONDS:-120}"
+      WOL_RETRY_INTERVAL_SECONDS: "${WOL_RETRY_INTERVAL_SECONDS:-60}"
+      WOL_MAX_RETRIES: "${WOL_MAX_RETRIES:-2}"
+      WOL_NTFY_URL: "${WOL_NTFY_URL:-}"
+      WOL_TELEGRAM_BOT_TOKEN: "${WOL_TELEGRAM_BOT_TOKEN:-}"
+      WOL_TELEGRAM_CHAT_ID: "${WOL_TELEGRAM_CHAT_ID:-}"
     volumes:
-      - ./config.yaml:/config/config.yaml
-      - ./backups:/config/backups
+      - wol-config:/config
+
+volumes:
+  wol-config:

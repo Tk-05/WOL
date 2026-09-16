@@ -1,3 +1,10 @@
+# This file is for running the daemon directly (Phase 0/1, e.g. via systemd) or for
+# a Docker deployment where you'd rather manage a file than environment variables.
+# Deploying via Portainer? You can skip this file entirely and use WOL_* environment
+# variables instead — see docs/portainer-setup.md. Env vars always take precedence over
+# this file if both are present; only the schedule below is exempt (always managed via
+# the web UI, never overwritten by env vars).
+
 # Proxmox API access — see docs/phase0-setup.md for how to set this up, including
 # creating a dedicated token scoped to Sys.PowerMgmt only (never use a root token here).
 proxmox:

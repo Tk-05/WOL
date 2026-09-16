@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import shutil
 from dataclasses import dataclass
 from datetime import datetime
@@ -9,6 +10,15 @@ import yaml
 
 VALID_DAYS = {"mon", "tue", "wed", "thu", "fri", "sat", "sun"}
 VALID_ACTIONS = {"on", "off"}
+
+_REQUIRED_ENV_VARS = [
+    "WOL_PROXMOX_HOST",
+    "WOL_PROXMOX_NODE",
+    "WOL_PROXMOX_TOKEN_ID",
+    "WOL_PROXMOX_TOKEN_SECRET",
+    "WOL_TARGET_MAC",
+    "WOL_TARGET_IP",
+]
 
 
 class ConfigError(Exception):
@@ -152,23 +162,94 @@ def _parse_schedule(entries: list) -> list[ScheduleRule]:
     return rules
 
 
+def _bool_env(name: str, default: bool) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value.strip().lower() in ("1", "true", "yes", "on")
+
+
+def _config_from_env() -> dict | None:
+    """Build the non-schedule parts of AppConfig from WOL_* env vars.
+
+    Returns None if none of the required vars are set (pure file-based config).
+    Raises ConfigError if some but not all required vars are set, since that's
+    almost certainly a mistake rather than an intentional partial setup.
+    """
+    present = [name for name in _REQUIRED_ENV_VARS if os.environ.get(name)]
+    if not present:
+        return None
+    missing = [name for name in _REQUIRED_ENV_VARS if name not in present]
+    if missing:
+        raise ConfigError(f"Incomplete WOL_* environment config, missing: {', '.join(missing)}")
+
+    ntfy_url = os.environ.get("WOL_NTFY_URL")
+    telegram_token = os.environ.get("WOL_TELEGRAM_BOT_TOKEN")
+    telegram_chat_id = os.environ.get("WOL_TELEGRAM_CHAT_ID")
+    if bool(telegram_token) != bool(telegram_chat_id):
+        raise ConfigError("WOL_TELEGRAM_BOT_TOKEN and WOL_TELEGRAM_CHAT_ID must be set together")
+
+    return {
+        "proxmox": ProxmoxConfig(
+            host=os.environ["WOL_PROXMOX_HOST"].rstrip("/"),
+            node=os.environ["WOL_PROXMOX_NODE"],
+            token_id=os.environ["WOL_PROXMOX_TOKEN_ID"],
+            token_secret=os.environ["WOL_PROXMOX_TOKEN_SECRET"],
+            verify_ssl=_bool_env("WOL_PROXMOX_VERIFY_SSL", False),
+        ),
+        "target": TargetConfig(
+            mac_address=os.environ["WOL_TARGET_MAC"],
+            ip_address=os.environ["WOL_TARGET_IP"],
+        ),
+        "status_check": StatusCheckConfig(
+            timeout_seconds=int(os.environ.get("WOL_STATUS_TIMEOUT_SECONDS", 5)),
+        ),
+        "wol": WolConfig(
+            verify_after_seconds=int(os.environ.get("WOL_VERIFY_AFTER_SECONDS", 120)),
+            retry_interval_seconds=int(os.environ.get("WOL_RETRY_INTERVAL_SECONDS", 60)),
+            max_retries=int(os.environ.get("WOL_MAX_RETRIES", 2)),
+        ),
+        "notifications": NotificationConfig(
+            ntfy=NtfyConfig(url=ntfy_url) if ntfy_url else None,
+            telegram=TelegramConfig(bot_token=telegram_token, chat_id=telegram_chat_id) if telegram_token else None,
+        ),
+    }
+
+
 def load_config(path: str | Path) -> AppConfig:
     path = Path(path)
-    if not path.exists():
-        raise ConfigError(
-            f"Config file not found: {path} (copy config.yaml.example and adjust it)"
-        )
-    with path.open(encoding="utf-8") as f:
-        raw = yaml.safe_load(f) or {}
+    env_config = _config_from_env()
 
-    return AppConfig(
-        proxmox=_parse_proxmox(_require(raw, "proxmox", "root")),
-        target=_parse_target(_require(raw, "target", "root")),
-        schedule=_parse_schedule(_require(raw, "schedule", "root")),
-        status_check=_parse_status_check(raw.get("status_check")),
-        wol=_parse_wol(raw.get("wol")),
-        notifications=_parse_notifications(raw.get("notifications")),
-    )
+    if path.exists():
+        with path.open(encoding="utf-8") as f:
+            raw = yaml.safe_load(f) or {}
+        schedule = _parse_schedule(raw.get("schedule", []))
+    elif env_config is None:
+        raise ConfigError(
+            f"Config file not found: {path} (copy config.yaml.example and adjust it, "
+            "or set the WOL_* environment variables, see docs/portainer-setup.md)"
+        )
+    else:
+        raw = {}
+        schedule = []
+
+    if env_config is not None:
+        # Env vars always win for deployment settings (so a redeploy with a changed
+        # token/IP takes effect); the schedule is only ever managed via the web UI,
+        # so it's preserved from the existing file if there is one.
+        config = AppConfig(schedule=schedule, **env_config)
+        save_config(config, path)
+    else:
+        config = AppConfig(
+            proxmox=_parse_proxmox(_require(raw, "proxmox", "root")),
+            target=_parse_target(_require(raw, "target", "root")),
+            schedule=schedule,
+            status_check=_parse_status_check(raw.get("status_check")),
+            wol=_parse_wol(raw.get("wol")),
+            notifications=_parse_notifications(raw.get("notifications")),
+        )
+
+    return config
 
 
 def save_config(config: AppConfig, path: str | Path) -> None:
