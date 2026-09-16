@@ -1,0 +1,15 @@
+[Unit]
+Description=WOL/Shutdown Scheduler for Proxmox Node
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/opt/wol-daemon
+ExecStart=/opt/wol-daemon/.venv/bin/python -m wol_daemon.daemon /opt/wol-daemon/config.yaml
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

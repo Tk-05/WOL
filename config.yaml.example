@@ -1,0 +1,48 @@
+# Proxmox API access — see docs/phase0-setup.md for how to set this up, including
+# creating a dedicated token scoped to Sys.PowerMgmt only (never use a root token here).
+proxmox:
+  host: "https://192.168.1.10:8006"
+  node: "pve"
+  token_id: "wol-daemon@pve!wol-daemon"
+  token_secret: "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+  verify_ssl: false
+
+# Target host (the Proxmox node this daemon controls)
+target:
+  mac_address: "AA:BB:CC:DD:EE:FF"
+  ip_address: "192.168.1.10"
+
+# Status check via ping (the Proxmox API is unreachable while the host is off)
+status_check:
+  timeout_seconds: 5
+
+# Wake verification: after the magic packet, check whether the node actually comes up,
+# otherwise resend. After max_retries failed attempts, it's only logged/notified.
+wol:
+  verify_after_seconds: 120
+  retry_interval_seconds: 60
+  max_retries: 2
+
+# Optional: notification when WOL fails after all retries or the shutdown call fails.
+# Omit the section or leave it empty to disable notifications.
+notifications: {}
+#  ntfy:
+#    url: "https://ntfy.sh/my-wol-topic"
+#  telegram:
+#    bot_token: "123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11"
+#    chat_id: "123456789"
+
+# Schedule rules. days: mon,tue,wed,thu,fri,sat,sun (combinable). time: "HH:MM". action: on|off
+schedule:
+  - name: "Weekdays on"
+    days: [mon, tue, wed, thu, fri]
+    time: "07:00"
+    action: "on"
+  - name: "Weekdays off"
+    days: [mon, tue, wed, thu, fri]
+    time: "23:00"
+    action: "off"
+  - name: "Weekend off"
+    days: [sat, sun]
+    time: "00:00"
+    action: "off"

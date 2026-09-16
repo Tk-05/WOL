@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WOL-Daemon</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font-family: system-ui, sans-serif; max-width: 760px; margin: 2rem auto; padding: 0 1rem; line-height: 1.4; }
+  h1 { font-size: 1.4rem; }
+  h2 { font-size: 1.1rem; margin-top: 2rem; }
+  .status { display: inline-block; padding: 0.15rem 0.6rem; border-radius: 999px; font-weight: 600; font-size: 0.85rem; }
+  .status.up { background: #1f8a3b22; color: #1f8a3b; }
+  .status.down { background: #c0392b22; color: #c0392b; }
+  .card { border: 1px solid #8884; border-radius: 8px; padding: 1rem; margin-bottom: 1rem; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 0.4rem 0.3rem; border-bottom: 1px solid #8883; font-size: 0.92rem; }
+  form.inline { display: inline; }
+  .actions button { margin-right: 0.5rem; }
+  .flash { padding: 0.5rem 0.8rem; border-radius: 6px; margin-bottom: 0.8rem; font-size: 0.9rem; }
+  .flash.success { background: #1f8a3b22; color: #1f8a3b; }
+  .flash.error { background: #c0392b22; color: #c0392b; }
+  .days label { margin-right: 0.6rem; font-size: 0.9rem; }
+  .add-form { display: flex; flex-wrap: wrap; gap: 0.6rem; align-items: end; }
+  .add-form > div { display: flex; flex-direction: column; font-size: 0.85rem; }
+  input, select { padding: 0.3rem; }
+  .log { font-family: ui-monospace, monospace; font-size: 0.8rem; max-height: 220px; overflow-y: auto; background: #8881; padding: 0.6rem; border-radius: 6px; }
+  small.muted { color: #888; }
+</style>
+</head>
+<body>
+  <h1>WOL-Daemon — {{ target.ip_address }}</h1>
+
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% for category, message in messages %}
+      <div class="flash {{ category }}">{{ message }}</div>
+    {% endfor %}
+  {% endwith %}
+
+  <div class="card">
+    <p>Status: <span class="status {{ 'up' if host_up else 'down' }}">{{ 'Online' if host_up else 'Offline' }}</span></p>
+    <p>Last action: {{ last_action or 'none yet' }}</p>
+    <p>Next scheduled action: {% if next_action %}{{ next_action[0] }} — {{ next_action[1] }}{% else %}no rules{% endif %}</p>
+    <form class="inline" method="post" action="{{ url_for('action_on') }}">
+      <button type="submit">Wake now</button>
+    </form>
+    <form class="inline" method="post" action="{{ url_for('action_off') }}">
+      <button type="submit">Shut down now</button>
+    </form>
+  </div>
+
+  <h2>Schedule</h2>
+  <table>
+    <thead><tr><th>Name</th><th>Days</th><th>Time</th><th>Action</th><th></th></tr></thead>
+    <tbody>
+      {% for rule in schedule %}
+      <tr>
+        <td>{{ rule.name }}</td>
+        <td>{{ rule.days_str }}</td>
+        <td>{{ rule.time }}</td>
+        <td>{{ 'On' if rule.action == 'on' else 'Off' }}</td>
+        <td class="actions">
+          <details>
+            <summary>Edit</summary>
+            <form method="post" action="{{ url_for('schedule_edit', index=rule.index) }}">
+              <div><input type="text" name="name" value="{{ rule.name }}" placeholder="Name"></div>
+              <div class="days">
+                {% for code, label in day_options %}
+                <label><input type="checkbox" name="days" value="{{ code }}" {{ 'checked' if code in rule.days else '' }}>{{ label }}</label>
+                {% endfor %}
+              </div>
+              <div>
+                <input type="time" name="time" value="{{ rule.time }}" required>
+                <select name="action">
+                  <option value="on" {{ 'selected' if rule.action == 'on' else '' }}>On</option>
+                  <option value="off" {{ 'selected' if rule.action == 'off' else '' }}>Off</option>
+                </select>
+                <button type="submit">Save</button>
+              </div>
+            </form>
+          </details>
+          <form class="inline" method="post" action="{{ url_for('schedule_delete', index=rule.index) }}" onsubmit="return confirm('Really delete this rule?')">
+            <button type="submit">Delete</button>
+          </form>
+        </td>
+      </tr>
+      {% else %}
+      <tr><td colspan="5"><small class="muted">No rules created yet</small></td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <h2>New rule</h2>
+  <form class="add-form" method="post" action="{{ url_for('schedule_add') }}">
+    <div>
+      <label>Name</label>
+      <input type="text" name="name" placeholder="e.g. Weekdays on">
+    </div>
+    <div class="days">
+      {% for code, label in day_options %}
+      <label><input type="checkbox" name="days" value="{{ code }}">{{ label }}</label>
+      {% endfor %}
+    </div>
+    <div>
+      <label>Time</label>
+      <input type="time" name="time" required>
+    </div>
+    <div>
+      <label>Action</label>
+      <select name="action">
+        <option value="on">On</option>
+        <option value="off">Off</option>
+      </select>
+    </div>
+    <div><button type="submit">Add</button></div>
+  </form>
+
+  <h2>Event log</h2>
+  <div class="log">
+    {% for line in events %}{{ line }}<br>{% else %}<small class="muted">no events yet</small>{% endfor %}
+  </div>
+</body>
+</html>

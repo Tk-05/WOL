@@ -1,0 +1,14 @@
+services:
+  wol-daemon:
+    build: .
+    image: wol-daemon:latest
+    container_name: wol-daemon
+    restart: unless-stopped
+    # Host networking isn't a nice-to-have here, it's a requirement: the magic packet broadcast
+    # (255.255.255.255) and the Proxmox ping need to go out over the Pi's real LAN interface.
+    # Over the Docker bridge (default network), the broadcast would never make it past the
+    # virtual switch. Only works on Linux (Pi), not with Docker Desktop on Mac/Windows.
+    network_mode: host
+    volumes:
+      - ./config.yaml:/config/config.yaml
+      - ./backups:/config/backups

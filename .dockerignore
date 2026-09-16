@@ -1,0 +1,11 @@
+.venv/
+.venv_test/
+__pycache__/
+*.pyc
+config.yaml
+config.yaml.test
+backups/
+systemd/
+.git/
+.gitignore
+_smoketest*.py
