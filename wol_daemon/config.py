@@ -46,6 +46,7 @@ class ScheduleRule:
     days: list[str]
     time: str
     action: str
+    skip_date: str | None = None  # ISO date; the rule's next occurrence on this date is skipped once
 
 
 @dataclass
@@ -157,6 +158,7 @@ def _parse_schedule(entries: list) -> list[ScheduleRule]:
                 days=list(days),
                 time=_require(entry, "time", section),
                 action=action,
+                skip_date=entry.get("skip_date"),
             )
         )
     return rules
@@ -288,7 +290,13 @@ def save_config(config: AppConfig, path: str | Path) -> None:
         },
         "notifications": notifications,
         "schedule": [
-            {"name": rule.name, "days": rule.days, "time": rule.time, "action": rule.action}
+            {
+                "name": rule.name,
+                "days": rule.days,
+                "time": rule.time,
+                "action": rule.action,
+                "skip_date": rule.skip_date,
+            }
             for rule in config.schedule
         ],
     }

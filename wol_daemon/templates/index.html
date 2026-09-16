@@ -213,7 +213,7 @@
       </div>
       <div>
         <dt>Next scheduled action</dt>
-        <dd>{% if next_action %}{{ next_action[0] }} — {{ next_action[1] }}{% else %}no rules{% endif %}</dd>
+        <dd>{{ next_action or 'no rules' }}</dd>
       </div>
     </dl>
     <div class="actions-row">
@@ -235,10 +235,16 @@
         <tr>
           <td>{{ rule.name }}</td>
           <td class="muted">{{ rule.days_str }}</td>
-          <td>{{ rule.time }}</td>
+          <td>
+            {{ rule.time }}
+            {% if rule.skip_pending %}<div class="muted" style="font-size: 0.75rem;">next run skipped</div>{% endif %}
+          </td>
           <td><span class="badge {{ rule.action }}">{{ 'On' if rule.action == 'on' else 'Off' }}</span></td>
           <td>
             <div class="actions-row">
+              <form class="inline" method="post" action="{{ url_for('schedule_skip', index=rule.index) }}">
+                <button type="submit" class="btn btn-outline btn-sm">{{ 'Undo skip' if rule.skip_pending else 'Skip next' }}</button>
+              </form>
               <details>
                 <summary><span class="btn btn-outline btn-sm">Edit</span></summary>
                 <div class="edit-panel">

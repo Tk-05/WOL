@@ -27,6 +27,7 @@ def create_app(
     event_log: EventLog,
     turn_on: Callable[[AppConfig, EventLog, BackgroundScheduler, str], None],
     turn_off: Callable[[AppConfig, ProxmoxClient, EventLog, str], None],
+    on_rule_skipped: Callable[[ScheduleRule, AppConfig, Path, EventLog], None],
 ) -> Flask:
     app = Flask(__name__)
     app.secret_key = secrets.token_hex(16)
@@ -37,6 +38,7 @@ def create_app(
             config.schedule,
             on_action=lambda: turn_on(config, event_log, scheduler, "schedule"),
             off_action=lambda: turn_off(config, proxmox_client, event_log, "schedule"),
+            on_skip=lambda rule: on_rule_skipped(rule, config, config_path, event_log),
         )
 
     def next_action_info():
@@ -44,7 +46,19 @@ def create_app(
         if not jobs:
             return None
         job = min(jobs, key=lambda j: j.next_run_time)
-        return job.name, job.next_run_time.strftime("%a %d %b %H:%M")
+        text = f"{job.name} — {job.next_run_time.strftime('%a %d %b %H:%M')}"
+        rule = _rule_for_job_id(job.id)
+        if rule is not None and rule.skip_date == job.next_run_time.date().isoformat():
+            text += " (will be skipped)"
+        return text
+
+    def _rule_for_job_id(job_id: str) -> ScheduleRule | None:
+        if not job_id or not job_id.startswith("rule-"):
+            return None
+        index = int(job_id.removeprefix("rule-"))
+        if 0 <= index < len(config.schedule):
+            return config.schedule[index]
+        return None
 
     def last_action_str():
         record = event_log.last_action
@@ -64,6 +78,7 @@ def create_app(
                 "days_str": ", ".join(sorted(rule.days, key=_DAY_ORDER.index)),
                 "time": rule.time,
                 "action": rule.action,
+                "skip_pending": rule.skip_date is not None,
             }
             for idx, rule in enumerate(config.schedule)
         ]
@@ -127,6 +142,25 @@ def create_app(
             save_config(config, config_path)
             rebuild_jobs()
             flash("Rule deleted", "success")
+        return redirect(url_for("index"))
+
+    @app.post("/schedule/<int:index>/skip")
+    def schedule_skip(index: int):
+        if not 0 <= index < len(config.schedule):
+            flash("Rule not found", "error")
+            return redirect(url_for("index"))
+        rule = config.schedule[index]
+        if rule.skip_date is not None:
+            rule.skip_date = None
+            flash("Skip cancelled", "success")
+        else:
+            job = scheduler.get_job(f"rule-{index}")
+            if job is None or job.next_run_time is None:
+                flash("No upcoming run to skip", "error")
+                return redirect(url_for("index"))
+            rule.skip_date = job.next_run_time.date().isoformat()
+            flash(f"Next run of '{rule.name}' will be skipped", "success")
+        save_config(config, config_path)
         return redirect(url_for("index"))
 
     return app

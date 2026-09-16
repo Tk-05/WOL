@@ -8,7 +8,7 @@ from pathlib import Path
 import requests
 from apscheduler.schedulers.background import BackgroundScheduler
 
-from .config import AppConfig, load_config
+from .config import AppConfig, ScheduleRule, load_config, save_config
 from .eventlog import EventLog, EventLogHandler
 from .magicpacket import send_magic_packet
 from .notify import send_notification
@@ -49,6 +49,12 @@ def turn_off(config: AppConfig, proxmox_client: ProxmoxClient, event_log: EventL
     event_log.record_action("off", source, "ok")
 
 
+def on_rule_skipped(rule: ScheduleRule, config: AppConfig, config_path: Path, event_log: EventLog) -> None:
+    logger.info("Skipping scheduled '%s' for rule '%s' (skip requested)", rule.action, rule.name)
+    event_log.record_action(rule.action, "schedule", "skipped", f"skipped by user ({rule.name})")
+    save_config(config, config_path)
+
+
 def main() -> None:
     config_path = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(__file__).resolve().parent.parent / "config.yaml"
     config = load_config(config_path)
@@ -63,11 +69,12 @@ def main() -> None:
         config.schedule,
         on_action=lambda: turn_on(config, event_log, scheduler, "schedule"),
         off_action=lambda: turn_off(config, proxmox_client, event_log, "schedule"),
+        on_skip=lambda rule: on_rule_skipped(rule, config, config_path, event_log),
     )
     scheduler.start()
     logger.info("WOL daemon started, %d schedule rule(s) loaded", len(config.schedule))
 
-    app = create_app(config_path, config, scheduler, proxmox_client, event_log, turn_on, turn_off)
+    app = create_app(config_path, config, scheduler, proxmox_client, event_log, turn_on, turn_off, on_rule_skipped)
 
     def handle_shutdown(signum, frame):
         logger.info("Shutting down WOL daemon...")
