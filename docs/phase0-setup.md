@@ -81,7 +81,7 @@ systemctl enable --now enable-wol.service
 cat /sys/class/net/enp2s0/address
 ```
 
-This goes into `target.mac_address` in `config.yaml`.
+This goes into that machine's `mac_address` in `config.yaml`.
 
 ## 5. Static IP / DHCP reservation
 
@@ -116,15 +116,18 @@ sync and no way for the two to drift apart.
 The token secret is printed once at creation — copy it immediately, it can't
 be retrieved again later.
 
-Fill the result into `config.yaml`:
+Fill the result into this machine's entry under `machines:` in `config.yaml`
+(see `config.yaml.example` for the full shape, including `mac_address` and
+`ip_address`):
 
 ```yaml
-proxmox:
-  host: "https://<proxmox-ip>:8006"
-  node: "<node-name>"
-  token_id: "wol-daemon@pve!wol-daemon"
-  token_secret: "<the printed secret>"
-  verify_ssl: false
+    shutdown:
+      type: "proxmox"
+      host: "https://<proxmox-ip>:8006"
+      node: "<node-name>"
+      token_id: "wol-daemon@pve!wol-daemon"
+      token_secret: "<the printed secret>"
+      verify_ssl: false
 ```
 
 ## 7. Verify before running the daemon

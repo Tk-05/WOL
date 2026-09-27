@@ -14,6 +14,12 @@ takes effect immediately. The **schedule** is the one exception: it's only
 ever managed through the daemon's own web UI (`http://<host>:9090`) and is
 preserved across redeploys, never overwritten by env vars.
 
+**This env var route only ever configures one machine.** If you want the
+daemon to manage more than one PC, skip straight to "Switching back to a
+file" below and use `config.yaml`'s `machines:` list instead — a list doesn't
+map cleanly onto Portainer's flat variable table, so multi-machine setups are
+YAML-only.
+
 ## 1. Complete Phase 0 first
 
 You need the Proxmox host/node, a `Sys.PowerMgmt`-scoped API token, and the
@@ -105,3 +111,16 @@ file across a bare-metal and a Docker deployment), just don't set any
 Env vars and a mounted file can coexist, but env vars always win for
 everything except the schedule — see the precedence note in
 `config.yaml.example`.
+
+## Multiple machines, and SSH-based shutdown
+
+Each entry under `machines:` in `config.yaml` gets its own page in the web UI
+(`http://<host>:9090/machines/<key>`); the root page becomes an overview
+listing all of them once there's more than one. See the two worked examples
+(Proxmox and SSH) in `config.yaml.example`.
+
+For a plain PC shut down over SSH, the private key file needs to be readable
+inside the container. Put it in the same volume as `config.yaml` — e.g. bind
+mount a host directory to `/config` and place the key at
+`/config/ssh/desktop_key`, matching `private_key_path` in the example — rather
+than trying to bake it into an environment variable.

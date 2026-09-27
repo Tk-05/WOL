@@ -1,9 +1,12 @@
 FROM python:3.12-slim
 
-# iputils-ping: wol_daemon/status.py checks the node's state via ICMP ping.
-# Runs as root in the container so this works without extra capability handling.
+# iputils-ping: wol_daemon/status.py checks a machine's state via ICMP ping.
+# openssh-client: wol_daemon/ssh_shutdown.py shells out to `ssh` for SSH-based shutdown.
+# Using the system ssh client instead of a Python SSH library (e.g. paramiko) avoids
+# depending on prebuilt wheels for cryptography's native extension on 32-bit ARM (Pi).
+# Runs as root in the container so ping works without extra capability handling.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends iputils-ping \
+    && apt-get install -y --no-install-recommends iputils-ping openssh-client \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

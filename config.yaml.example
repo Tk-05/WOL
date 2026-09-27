@@ -1,55 +1,84 @@
 # This file is for running the daemon directly (Phase 0/1, e.g. via systemd) or for
 # a Docker deployment where you'd rather manage a file than environment variables.
-# Deploying via Portainer? You can skip this file entirely and use WOL_* environment
-# variables instead — see docs/portainer-setup.md. Env vars always take precedence over
-# this file if both are present; only the schedule below is exempt (always managed via
-# the web UI, never overwritten by env vars).
+# Deploying via Portainer with a single machine? You can skip this file entirely and use
+# WOL_* environment variables instead — see docs/portainer-setup.md. Env vars always take
+# precedence over this file for that one machine if both are present; only its schedule is
+# exempt (always managed via the web UI, never overwritten by env vars). Multiple machines
+# can only be configured here, not via environment variables.
 
-# Proxmox API access — see docs/phase0-setup.md for how to set this up, including
-# creating a dedicated token scoped to Sys.PowerMgmt only (never use a root token here).
-proxmox:
-  host: "https://192.168.1.10:8006"
-  node: "pve"
-  token_id: "wol-daemon@pve!wol-daemon"
-  token_secret: "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
-  verify_ssl: false
+# One entry per machine you want the daemon to manage. Each needs:
+#   key          stable id used in URLs, lowercase letters/digits/hyphens only
+#   name         display name shown in the web UI
+#   mac_address  for the Wake-on-LAN magic packet
+#   ip_address   used for the status ping and (for proxmox) the API host
+#   shutdown     how to power it off remotely — see the two examples below.
+#                Omit entirely (or set "type: none") for a wake-only machine with no
+#                automated shutdown.
+#   schedule     this machine's own on/off rules, same format as before, just nested here.
+machines:
+  # Example 1: a Proxmox node, shut down via its API — see docs/phase0-setup.md for how to
+  # set up the token (dedicated user, Sys.PowerMgmt-only role, never a root token).
+  - key: "pve"
+    name: "Proxmox Node"
+    mac_address: "AA:BB:CC:DD:EE:FF"
+    ip_address: "192.168.1.10"
+    shutdown:
+      type: "proxmox"
+      host: "https://192.168.1.10:8006"
+      node: "pve"
+      token_id: "wol-daemon@pve!wol-daemon"
+      token_secret: "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+      verify_ssl: false
+    schedule:
+      - name: "Weekdays on"
+        days: [mon, tue, wed, thu, fri]
+        time: "07:00"
+        action: "on"
+      - name: "Weekdays off"
+        days: [mon, tue, wed, thu, fri]
+        time: "23:00"
+        action: "off"
+      - name: "Weekend off"
+        days: [sat, sun]
+        time: "00:00"
+        action: "off"
 
-# Target host (the Proxmox node this daemon controls)
-target:
-  mac_address: "AA:BB:CC:DD:EE:FF"
-  ip_address: "192.168.1.10"
+  # Example 2: a plain PC, shut down via SSH (key-based auth, no password). private_key_path
+  # must point to a key file readable inside the container/host, e.g. mounted alongside
+  # config.yaml. command defaults to "shutdown -h +1" (Linux) — the 1-minute delay lets ssh
+  # return cleanly before the connection drops, instead of racing the shutdown itself. For
+  # Windows (with an SSH server enabled) use something like "shutdown /s /t 60" instead.
+  - key: "desktop"
+    name: "Desktop PC"
+    mac_address: "11:22:33:44:55:66"
+    ip_address: "192.168.1.20"
+    shutdown:
+      type: "ssh"
+      host: "192.168.1.20"
+      port: 22
+      username: "wol"
+      private_key_path: "/config/ssh/desktop_key"
+      command: "shutdown -h +1"
+    schedule: []
 
-# Status check via ping (the Proxmox API is unreachable while the host is off)
+# Status check via ping (a Proxmox node's API is unreachable while it's off, so this is the
+# only way to tell whether any machine is currently up). Shared by all machines.
 status_check:
   timeout_seconds: 5
 
-# Wake verification: after the magic packet, check whether the node actually comes up,
-# otherwise resend. After max_retries failed attempts, it's only logged/notified.
+# Wake verification: after the magic packet, check whether the machine actually comes up,
+# otherwise resend. After max_retries failed attempts, it's only logged/notified. Shared by
+# all machines.
 wol:
   verify_after_seconds: 120
   retry_interval_seconds: 60
   max_retries: 2
 
-# Optional: notification when WOL fails after all retries or the shutdown call fails.
-# Omit the section or leave it empty to disable notifications.
+# Optional: notification when WOL fails after all retries or a shutdown call fails, for any
+# machine. Omit the section or leave it empty to disable notifications.
 notifications: {}
 #  ntfy:
 #    url: "https://ntfy.sh/my-wol-topic"
 #  telegram:
 #    bot_token: "123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11"
 #    chat_id: "123456789"
-
-# Schedule rules. days: mon,tue,wed,thu,fri,sat,sun (combinable). time: "HH:MM". action: on|off
-schedule:
-  - name: "Weekdays on"
-    days: [mon, tue, wed, thu, fri]
-    time: "07:00"
-    action: "on"
-  - name: "Weekdays off"
-    days: [mon, tue, wed, thu, fri]
-    time: "23:00"
-    action: "off"
-  - name: "Weekend off"
-    days: [sat, sun]
-    time: "00:00"
-    action: "off"

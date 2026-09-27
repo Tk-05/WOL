@@ -4,13 +4,13 @@ import logging
 
 import requests
 
-from .config import ProxmoxConfig
+from .config import ProxmoxShutdown
 
 logger = logging.getLogger(__name__)
 
 
 class ProxmoxClient:
-    def __init__(self, config: ProxmoxConfig):
+    def __init__(self, config: ProxmoxShutdown):
         self._config = config
         self._auth_header = f"PVEAPIToken={config.token_id}={config.token_secret}"
 

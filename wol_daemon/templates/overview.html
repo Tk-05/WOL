@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WOL Daemon</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <header class="header-row">
+    <div>
+      <h1>WOL Daemon</h1>
+      <p>{{ machines|length }} machine(s) managed</p>
+    </div>
+    <a class="btn btn-outline btn-sm" href="{{ url_for('machine_add') }}">+ Add machine</a>
+  </header>
+
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% for category, message in messages %}
+      <div class="flash {{ category }}">{{ message }}</div>
+    {% endfor %}
+  {% endwith %}
+
+  {% if not machines %}
+  <div class="card">
+    <p class="muted" style="margin: 0 0 1rem;">No machines configured yet.</p>
+    <a class="btn btn-primary" href="{{ url_for('machine_add') }}">Add your first machine</a>
+  </div>
+  {% endif %}
+
+  <div class="machine-grid">
+    {% for machine in machines %}
+    <div class="card machine-card">
+      <div class="machine-card-name"><a href="{{ url_for('machine_detail', key=machine.key) }}">{{ machine.name }}</a></div>
+      <div class="machine-card-meta">{{ machine.ip_address }} ({{ machine.mac_address }})</div>
+      <div class="status-row">
+        <span class="status-dot {{ 'up' if machine.host_up else 'down' }}"></span>
+        <span class="status-text">{{ 'Online' if machine.host_up else 'Offline' }}</span>
+      </div>
+      <dl class="meta-grid">
+        <div>
+          <dt>Last action</dt>
+          <dd>{{ machine.last_action or 'none yet' }}</dd>
+        </div>
+        <div>
+          <dt>Next scheduled action</dt>
+          <dd>{{ machine.next_action or 'no rules' }}</dd>
+        </div>
+      </dl>
+      <div class="actions-row">
+        <form class="inline" method="post" action="{{ url_for('action_on', key=machine.key) }}">
+          <button type="submit" class="btn btn-primary btn-sm">Wake now</button>
+        </form>
+        <form class="inline" method="post" action="{{ url_for('action_off', key=machine.key) }}">
+          <button type="submit" class="btn btn-outline-danger btn-sm" {{ 'disabled' if not machine.has_shutdown else '' }}>Shut down now</button>
+        </form>
+        <a class="btn btn-outline btn-sm" href="{{ url_for('machine_detail', key=machine.key) }}">Manage schedule</a>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+
+  <h2>Event log</h2>
+  <div class="log">
+    {% for line in events %}{{ line }}<br>{% else %}<span class="muted">no events yet</span>{% endfor %}
+  </div>
+</body>
+</html>

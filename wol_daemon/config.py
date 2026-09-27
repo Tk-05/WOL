@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
 from dataclasses import dataclass
 from datetime import datetime
@@ -10,6 +11,8 @@ import yaml
 
 VALID_DAYS = {"mon", "tue", "wed", "thu", "fri", "sat", "sun"}
 VALID_ACTIONS = {"on", "off"}
+VALID_SHUTDOWN_TYPES = {"proxmox", "ssh", "none"}
+KEY_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 
 _REQUIRED_ENV_VARS = [
     "WOL_PROXMOX_HOST",
@@ -26,7 +29,7 @@ class ConfigError(Exception):
 
 
 @dataclass
-class ProxmoxConfig:
+class ProxmoxShutdown:
     host: str
     node: str
     token_id: str
@@ -35,9 +38,14 @@ class ProxmoxConfig:
 
 
 @dataclass
-class TargetConfig:
-    mac_address: str
-    ip_address: str
+class SshShutdown:
+    host: str
+    port: int = 22
+    username: str = "root"
+    private_key_path: str = ""
+    # A short delay (rather than an immediate shutdown) lets the ssh command return with a
+    # clean exit status before the connection drops, instead of racing the shutdown itself.
+    command: str = "shutdown -h +1"
 
 
 @dataclass
@@ -47,6 +55,16 @@ class ScheduleRule:
     time: str
     action: str
     skip_date: str | None = None  # ISO date; the rule's next occurrence on this date is skipped once
+
+
+@dataclass
+class Machine:
+    key: str
+    name: str
+    mac_address: str
+    ip_address: str
+    shutdown: ProxmoxShutdown | SshShutdown | None
+    schedule: list[ScheduleRule]
 
 
 @dataclass
@@ -80,9 +98,7 @@ class NotificationConfig:
 
 @dataclass
 class AppConfig:
-    proxmox: ProxmoxConfig
-    target: TargetConfig
-    schedule: list[ScheduleRule]
+    machines: list[Machine]
     status_check: StatusCheckConfig
     wol: WolConfig
     notifications: NotificationConfig
@@ -94,20 +110,28 @@ def _require(data: dict, key: str, section: str):
     return data[key]
 
 
-def _parse_proxmox(data: dict) -> ProxmoxConfig:
-    return ProxmoxConfig(
-        host=_require(data, "host", "proxmox").rstrip("/"),
-        node=_require(data, "node", "proxmox"),
-        token_id=_require(data, "token_id", "proxmox"),
-        token_secret=_require(data, "token_secret", "proxmox"),
-        verify_ssl=data.get("verify_ssl", True),
-    )
-
-
-def _parse_target(data: dict) -> TargetConfig:
-    return TargetConfig(
-        mac_address=_require(data, "mac_address", "target"),
-        ip_address=_require(data, "ip_address", "target"),
+def _parse_shutdown(data: dict | None, section: str) -> ProxmoxShutdown | SshShutdown | None:
+    if not data:
+        return None
+    shutdown_type = data.get("type", "none")
+    if shutdown_type not in VALID_SHUTDOWN_TYPES:
+        raise ConfigError(f"Invalid shutdown type '{shutdown_type}' in {section}, allowed: {sorted(VALID_SHUTDOWN_TYPES)}")
+    if shutdown_type == "none":
+        return None
+    if shutdown_type == "proxmox":
+        return ProxmoxShutdown(
+            host=_require(data, "host", section).rstrip("/"),
+            node=_require(data, "node", section),
+            token_id=_require(data, "token_id", section),
+            token_secret=_require(data, "token_secret", section),
+            verify_ssl=data.get("verify_ssl", True),
+        )
+    return SshShutdown(
+        host=_require(data, "host", section),
+        port=data.get("port", 22),
+        username=data.get("username", "root"),
+        private_key_path=data.get("private_key_path", ""),
+        command=data.get("command", "shutdown -h +1"),
     )
 
 
@@ -164,6 +188,54 @@ def _parse_schedule(entries: list) -> list[ScheduleRule]:
     return rules
 
 
+def _parse_machines(entries: list) -> list[Machine]:
+    if not entries:
+        raise ConfigError("At least one machine must be configured under 'machines'")
+    machines = []
+    seen_keys: set[str] = set()
+    for i, entry in enumerate(entries):
+        section = f"machines[{i}]"
+        key = entry.get("key") or f"machine-{i}"
+        if not KEY_RE.match(key):
+            raise ConfigError(f"Invalid key '{key}' in {section}: use lowercase letters, digits and hyphens only")
+        if key in seen_keys:
+            raise ConfigError(f"Duplicate machine key '{key}'")
+        seen_keys.add(key)
+        machines.append(
+            Machine(
+                key=key,
+                name=entry.get("name", key),
+                mac_address=_require(entry, "mac_address", section),
+                ip_address=_require(entry, "ip_address", section),
+                shutdown=_parse_shutdown(entry.get("shutdown"), f"{section}.shutdown"),
+                schedule=_parse_schedule(entry.get("schedule", [])),
+            )
+        )
+    return machines
+
+
+def _migrate_legacy(raw: dict) -> dict:
+    """Convert a pre-multi-machine config.yaml (top-level proxmox/target/schedule) into the
+    current machines-list shape. Runs transparently on load; the file is rewritten to the new
+    shape the next time save_config() is called (e.g. via any schedule edit in the web UI)."""
+    proxmox = raw.get("proxmox") or {}
+    target = raw["target"]
+    machine = {
+        "key": "default",
+        "name": proxmox.get("node") or "Machine",
+        "mac_address": target["mac_address"],
+        "ip_address": target["ip_address"],
+        "shutdown": {"type": "proxmox", **proxmox} if proxmox else None,
+        "schedule": raw.get("schedule", []),
+    }
+    return {
+        "machines": [machine],
+        "status_check": raw.get("status_check"),
+        "wol": raw.get("wol"),
+        "notifications": raw.get("notifications"),
+    }
+
+
 def _bool_env(name: str, default: bool) -> bool:
     value = os.environ.get(name)
     if value is None:
@@ -172,11 +244,15 @@ def _bool_env(name: str, default: bool) -> bool:
 
 
 def _config_from_env() -> dict | None:
-    """Build the non-schedule parts of AppConfig from WOL_* env vars.
+    """Build a single-machine AppConfig (minus schedule) from WOL_* env vars.
 
     Returns None if none of the required vars are set (pure file-based config).
     Raises ConfigError if some but not all required vars are set, since that's
     almost certainly a mistake rather than an intentional partial setup.
+
+    This only ever produces one machine (key "default") — a list of machines
+    doesn't map cleanly onto a flat env var table, so multi-machine setups need
+    a mounted config.yaml instead. See docs/portainer-setup.md.
     """
     present = [name for name in _REQUIRED_ENV_VARS if os.environ.get(name)]
     if not present:
@@ -191,18 +267,23 @@ def _config_from_env() -> dict | None:
     if bool(telegram_token) != bool(telegram_chat_id):
         raise ConfigError("WOL_TELEGRAM_BOT_TOKEN and WOL_TELEGRAM_CHAT_ID must be set together")
 
-    return {
-        "proxmox": ProxmoxConfig(
+    machine = Machine(
+        key="default",
+        name=os.environ["WOL_PROXMOX_NODE"],
+        mac_address=os.environ["WOL_TARGET_MAC"],
+        ip_address=os.environ["WOL_TARGET_IP"],
+        shutdown=ProxmoxShutdown(
             host=os.environ["WOL_PROXMOX_HOST"].rstrip("/"),
             node=os.environ["WOL_PROXMOX_NODE"],
             token_id=os.environ["WOL_PROXMOX_TOKEN_ID"],
             token_secret=os.environ["WOL_PROXMOX_TOKEN_SECRET"],
             verify_ssl=_bool_env("WOL_PROXMOX_VERIFY_SSL", False),
         ),
-        "target": TargetConfig(
-            mac_address=os.environ["WOL_TARGET_MAC"],
-            ip_address=os.environ["WOL_TARGET_IP"],
-        ),
+        schedule=[],
+    )
+
+    return {
+        "machines": [machine],
         "status_check": StatusCheckConfig(
             timeout_seconds=int(os.environ.get("WOL_STATUS_TIMEOUT_SECONDS", 5)),
         ),
@@ -225,7 +306,9 @@ def load_config(path: str | Path) -> AppConfig:
     if path.exists():
         with path.open(encoding="utf-8") as f:
             raw = yaml.safe_load(f) or {}
-        schedule = _parse_schedule(raw.get("schedule", []))
+        if "machines" not in raw and "target" in raw:
+            raw = _migrate_legacy(raw)
+        existing_machines = _parse_machines(raw.get("machines", []))
     elif env_config is None:
         raise ConfigError(
             f"Config file not found: {path} (copy config.yaml.example and adjust it, "
@@ -233,25 +316,54 @@ def load_config(path: str | Path) -> AppConfig:
         )
     else:
         raw = {}
-        schedule = []
+        existing_machines = []
 
     if env_config is not None:
         # Env vars always win for deployment settings (so a redeploy with a changed
         # token/IP takes effect); the schedule is only ever managed via the web UI,
-        # so it's preserved from the existing file if there is one.
-        config = AppConfig(schedule=schedule, **env_config)
+        # so it's preserved from the existing file's "default" machine if there is one.
+        env_machine = env_config["machines"][0]
+        existing_by_key = {m.key: m for m in existing_machines}
+        if env_machine.key in existing_by_key:
+            env_machine.schedule = existing_by_key[env_machine.key].schedule
+        config = AppConfig(
+            machines=[env_machine],
+            status_check=env_config["status_check"],
+            wol=env_config["wol"],
+            notifications=env_config["notifications"],
+        )
         save_config(config, path)
     else:
         config = AppConfig(
-            proxmox=_parse_proxmox(_require(raw, "proxmox", "root")),
-            target=_parse_target(_require(raw, "target", "root")),
-            schedule=schedule,
+            machines=existing_machines,
             status_check=_parse_status_check(raw.get("status_check")),
             wol=_parse_wol(raw.get("wol")),
             notifications=_parse_notifications(raw.get("notifications")),
         )
 
     return config
+
+
+def _shutdown_to_dict(shutdown: ProxmoxShutdown | SshShutdown | None) -> dict | None:
+    if shutdown is None:
+        return None
+    if isinstance(shutdown, ProxmoxShutdown):
+        return {
+            "type": "proxmox",
+            "host": shutdown.host,
+            "node": shutdown.node,
+            "token_id": shutdown.token_id,
+            "token_secret": shutdown.token_secret,
+            "verify_ssl": shutdown.verify_ssl,
+        }
+    return {
+        "type": "ssh",
+        "host": shutdown.host,
+        "port": shutdown.port,
+        "username": shutdown.username,
+        "private_key_path": shutdown.private_key_path,
+        "command": shutdown.command,
+    }
 
 
 def save_config(config: AppConfig, path: str | Path) -> None:
@@ -269,17 +381,26 @@ def save_config(config: AppConfig, path: str | Path) -> None:
         }
 
     data = {
-        "proxmox": {
-            "host": config.proxmox.host,
-            "node": config.proxmox.node,
-            "token_id": config.proxmox.token_id,
-            "token_secret": config.proxmox.token_secret,
-            "verify_ssl": config.proxmox.verify_ssl,
-        },
-        "target": {
-            "mac_address": config.target.mac_address,
-            "ip_address": config.target.ip_address,
-        },
+        "machines": [
+            {
+                "key": machine.key,
+                "name": machine.name,
+                "mac_address": machine.mac_address,
+                "ip_address": machine.ip_address,
+                "shutdown": _shutdown_to_dict(machine.shutdown),
+                "schedule": [
+                    {
+                        "name": rule.name,
+                        "days": rule.days,
+                        "time": rule.time,
+                        "action": rule.action,
+                        "skip_date": rule.skip_date,
+                    }
+                    for rule in machine.schedule
+                ],
+            }
+            for machine in config.machines
+        ],
         "status_check": {
             "timeout_seconds": config.status_check.timeout_seconds,
         },
@@ -289,16 +410,6 @@ def save_config(config: AppConfig, path: str | Path) -> None:
             "max_retries": config.wol.max_retries,
         },
         "notifications": notifications,
-        "schedule": [
-            {
-                "name": rule.name,
-                "days": rule.days,
-                "time": rule.time,
-                "action": rule.action,
-                "skip_date": rule.skip_date,
-            }
-            for rule in config.schedule
-        ],
     }
     with path.open("w", encoding="utf-8") as f:
         yaml.safe_dump(data, f, allow_unicode=True, sort_keys=False)

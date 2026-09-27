@@ -10,8 +10,9 @@ from threading import Lock
 @dataclass
 class ActionRecord:
     timestamp: datetime
+    machine_key: str
     action: str  # "on" | "off"
-    source: str  # "schedule" | "manuell"
+    source: str  # "schedule" | "manual" | "watchdog"
     result: str  # "ok" | "skipped" | "error"
     detail: str = ""
 
@@ -20,15 +21,19 @@ class EventLog:
     def __init__(self, max_events: int = 200):
         self._lock = Lock()
         self._events: deque[str] = deque(maxlen=max_events)
-        self.last_action: ActionRecord | None = None
+        self._last_actions: dict[str, ActionRecord] = {}
 
     def add_event(self, message: str) -> None:
         with self._lock:
             self._events.append(f"{datetime.now():%Y-%m-%d %H:%M:%S}  {message}")
 
-    def record_action(self, action: str, source: str, result: str, detail: str = "") -> None:
+    def record_action(self, machine_key: str, action: str, source: str, result: str, detail: str = "") -> None:
         with self._lock:
-            self.last_action = ActionRecord(datetime.now(), action, source, result, detail)
+            self._last_actions[machine_key] = ActionRecord(datetime.now(), machine_key, action, source, result, detail)
+
+    def last_action_for(self, machine_key: str) -> ActionRecord | None:
+        with self._lock:
+            return self._last_actions.get(machine_key)
 
     def recent_events(self, limit: int = 20) -> list[str]:
         with self._lock:
