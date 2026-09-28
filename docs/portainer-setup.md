@@ -132,6 +132,12 @@ Machines added in the web UI are stored under `machines:` in `config.yaml`
 gets its own page (`http://<host>:9090/machines/<key>`); the root page becomes
 an overview listing all of them once there's more than one.
 
+**Edit machine** and **Edit cluster** on those pages change everything except
+the key, and take effect immediately, including for already scheduled and
+running actions; no restart needed. When editing a Proxmox machine, leave the
+token secret empty to keep the current one. The machine defined by `WOL_*`
+environment variables can't be edited in the UI while they're set.
+
 For a plain PC shut down over SSH, the private key file needs to be readable
 inside the container. Put it in the same volume as `config.yaml` — e.g. bind
 mount a host directory to `/config` and place the key at

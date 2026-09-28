@@ -46,6 +46,21 @@
   {% if not machine.has_shutdown %}
   <p class="form-hint muted">No shutdown method configured for this machine — wake-only.</p>
   {% endif %}
+
+  <details class="card-details">
+    <summary><span class="btn btn-outline btn-sm">Edit machine</span></summary>
+    <div class="edit-panel">
+      {% if env_locked %}
+      <p class="form-hint muted">This machine is defined by WOL_* environment variables, which rebuild it on every start. Change them in the stack's environment variables and redeploy instead. Its schedule can be edited below as usual.</p>
+      {% else %}
+      <form method="post" action="{{ url_for('machine_edit', key=machine.key) }}">
+        <p class="form-hint muted">Key: <code>{{ machine.key }}</code> (can't be changed). Changes apply immediately, including to scheduled and running actions.</p>
+        {% include "_machine_fields.html" %}
+        <div style="margin-top: 1rem;"><button type="submit" class="btn btn-primary btn-sm">Save machine</button></div>
+      </form>
+      {% endif %}
+    </div>
+  </details>
 </div>
 
 {% include "_schedule.html" %}

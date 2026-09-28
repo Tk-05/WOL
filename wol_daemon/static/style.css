@@ -205,6 +205,8 @@ input[type="text"]:focus, input[type="time"]:focus, input[type="number"]:focus, 
 .muted { color: var(--text-muted); }
 
 .form-hint { font-size: 0.8rem; margin: 0.4rem 0 0.75rem; }
+.card-details { margin-top: 1rem; }
+.edit-panel .form-hint:first-child { margin-top: 0; }
 .card .form-hint:last-child { margin-bottom: 0; }
 .card-text { margin: 0 0 0.9rem; font-size: 0.9rem; }
 code { font-family: ui-monospace, "SF Mono", Consolas, monospace; font-size: 0.85em; }

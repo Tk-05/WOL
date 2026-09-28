@@ -14,6 +14,7 @@ from .config import (
     AppConfig,
     Cluster,
     ConfigError,
+    ENV_MACHINE_KEY,
     KEY_RE,
     Machine,
     ProxmoxShutdown,
@@ -32,6 +33,7 @@ from .scheduler import cluster_job_prefix, machine_job_prefix, owner_event_key
 from .status import is_host_up
 
 _TIME_RE = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
+_MAC_RE = re.compile(r"^[0-9A-Fa-f]{2}([:-]?[0-9A-Fa-f]{2}){5}$")
 _DAY_ORDER = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
 _DAY_LABELS = {"mon": "Mon", "tue": "Tue", "wed": "Wed", "thu": "Thu", "fri": "Fri", "sat": "Sat", "sun": "Sun"}
 _DAY_OPTIONS = [(code, _DAY_LABELS[code]) for code in _DAY_ORDER]
@@ -56,6 +58,10 @@ def create_app(
 
     def get_cluster(key: str) -> Cluster | None:
         return next((c for c in config.clusters if c.key == key), None)
+
+    def is_env_machine(machine: Machine) -> bool:
+        # WOL_* env vars rebuild this machine on every start, so UI edits would be lost.
+        return machine.key == ENV_MACHINE_KEY and env_config_active()
 
     def ping_all(machines: list[Machine]) -> dict[str, bool]:
         if not machines:
@@ -216,7 +222,7 @@ def create_app(
     @app.route("/machines/add", methods=["GET", "POST"])
     def machine_add():
         if request.method == "GET":
-            return render_template("add_machine.html")
+            return render_template("add_machine.html", form=_machine_form_values(None))
         try:
             machine = _machine_from_form(request.form, {m.key for m in config.machines})
         except ConfigError as exc:
@@ -255,7 +261,33 @@ def create_app(
             day_options=_DAY_OPTIONS,
             owner_key=machine.key,
             sched_ep="schedule",
+            form=_machine_form_values(machine),
+            env_locked=is_env_machine(machine),
         )
+
+    @app.post("/machines/<key>/edit")
+    def machine_edit(key: str):
+        machine = machine_or_redirect(key)
+        if machine is None:
+            return redirect(url_for("index"))
+        back = url_for("machine_detail", key=key)
+        if is_env_machine(machine):
+            flash("This machine comes from WOL_* environment variables; change them in the stack instead", "error")
+            return redirect(back)
+        try:
+            name, mac_address, ip_address, shutdown = _machine_settings_from_form(request.form, key, machine.shutdown)
+        except ConfigError as exc:
+            flash(str(exc), "error")
+            return redirect(back)
+        # Update the existing object instead of replacing it: scheduled rule jobs, pending wake
+        # checks and running cluster steps all hold a reference to it, and must see the change.
+        machine.name = name
+        machine.mac_address = mac_address
+        machine.ip_address = ip_address
+        machine.shutdown = shutdown
+        save_config(config, config_path)
+        flash(f"Machine '{machine.name}' saved", "success")
+        return redirect(back)
 
     @app.post("/machines/<key>/action/<action>")
     def machine_action(key: str, action: str):
@@ -514,10 +546,18 @@ def _machine_from_form(form, existing_keys: set[str]) -> Machine:
         raise ConfigError("Key must use lowercase letters, digits and hyphens only, e.g. 'desktop-pc'")
     if key in existing_keys:
         raise ConfigError(f"A machine with key '{key}' already exists")
+    name, mac_address, ip_address, shutdown = _machine_settings_from_form(form, key, previous_shutdown=None)
+    return Machine(key=key, name=name, mac_address=mac_address, ip_address=ip_address, shutdown=shutdown, schedule=[])
 
+
+def _machine_settings_from_form(
+    form, key: str, previous_shutdown: ProxmoxShutdown | SshShutdown | None
+) -> tuple[str, str, str, ProxmoxShutdown | SshShutdown | None]:
+    """Shared by adding and editing. The Proxmox token secret is never sent to the browser,
+    so an empty secret field while editing means 'keep the current one'."""
     mac_address = form.get("mac_address", "").strip()
-    if not mac_address:
-        raise ConfigError("MAC address is required")
+    if not _MAC_RE.match(mac_address):
+        raise ConfigError("MAC address must look like AA:BB:CC:DD:EE:FF")
     ip_address = form.get("ip_address", "").strip()
     if not ip_address:
         raise ConfigError("IP address is required")
@@ -530,6 +570,8 @@ def _machine_from_form(form, existing_keys: set[str]) -> Machine:
         node = form.get("proxmox_node", "").strip()
         token_id = form.get("proxmox_token_id", "").strip()
         token_secret = form.get("proxmox_token_secret", "").strip()
+        if not token_secret and isinstance(previous_shutdown, ProxmoxShutdown):
+            token_secret = previous_shutdown.token_secret
         if not (host and node and token_id and token_secret):
             raise ConfigError("Proxmox host, node, token id and token secret are all required")
         shutdown = ProxmoxShutdown(
@@ -556,4 +598,29 @@ def _machine_from_form(form, existing_keys: set[str]) -> Machine:
     elif shutdown_type != "none":
         raise ConfigError(f"Invalid shutdown type: {shutdown_type}")
 
-    return Machine(key=key, name=name, mac_address=mac_address, ip_address=ip_address, shutdown=shutdown, schedule=[])
+    return name, mac_address, ip_address, shutdown
+
+
+def _machine_form_values(machine: Machine | None) -> dict:
+    """Prefill values for the shared machine form; empty for 'Add machine'."""
+    values = {
+        "name": "", "mac_address": "", "ip_address": "", "shutdown_type": "none",
+        "proxmox_host": "", "proxmox_node": "", "proxmox_token_id": "", "proxmox_verify_ssl": False,
+        "has_secret": False,
+        "ssh_host": "", "ssh_port": "", "ssh_username": "", "ssh_private_key_path": "", "ssh_command": "",
+    }
+    if machine is None:
+        return values
+    values.update(name=machine.name, mac_address=machine.mac_address, ip_address=machine.ip_address)
+    shutdown = machine.shutdown
+    if isinstance(shutdown, ProxmoxShutdown):
+        values.update(
+            shutdown_type="proxmox", proxmox_host=shutdown.host, proxmox_node=shutdown.node,
+            proxmox_token_id=shutdown.token_id, proxmox_verify_ssl=shutdown.verify_ssl, has_secret=True,
+        )
+    elif isinstance(shutdown, SshShutdown):
+        values.update(
+            shutdown_type="ssh", ssh_host=shutdown.host, ssh_port=shutdown.port, ssh_username=shutdown.username,
+            ssh_private_key_path=shutdown.private_key_path, ssh_command=shutdown.command,
+        )
+    return values

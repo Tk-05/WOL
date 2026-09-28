@@ -13,6 +13,8 @@ VALID_DAYS = {"mon", "tue", "wed", "thu", "fri", "sat", "sun"}
 VALID_ACTIONS = {"on", "off"}
 VALID_SHUTDOWN_TYPES = {"proxmox", "ssh", "none"}
 KEY_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
+# Key of the one machine that WOL_* env vars define (and that legacy configs migrate to).
+ENV_MACHINE_KEY = "default"
 
 _REQUIRED_ENV_VARS = [
     "WOL_PROXMOX_HOST",
@@ -261,7 +263,7 @@ def _migrate_legacy(raw: dict) -> dict:
     proxmox = raw.get("proxmox") or {}
     target = raw["target"]
     machine = {
-        "key": "default",
+        "key": ENV_MACHINE_KEY,
         "name": proxmox.get("node") or "Machine",
         "mac_address": target["mac_address"],
         "ip_address": target["ip_address"],
@@ -312,7 +314,7 @@ def _config_from_env() -> dict | None:
         raise ConfigError("WOL_TELEGRAM_BOT_TOKEN and WOL_TELEGRAM_CHAT_ID must be set together")
 
     machine = Machine(
-        key="default",
+        key=ENV_MACHINE_KEY,
         name=os.environ["WOL_PROXMOX_NODE"],
         mac_address=os.environ["WOL_TARGET_MAC"],
         ip_address=os.environ["WOL_TARGET_IP"],

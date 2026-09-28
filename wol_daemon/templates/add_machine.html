@@ -8,85 +8,16 @@
 {% endblock %}
 
 {% block content %}
-  <div class="card">
-    <form method="post" action="{{ url_for('machine_add') }}">
-      <div class="form-grid">
-        <div>
-          <label class="field-label">Key</label>
-          <input type="text" name="key" placeholder="desktop-pc" required>
-        </div>
-        <div>
-          <label class="field-label">Name</label>
-          <input type="text" name="name" placeholder="Desktop PC">
-        </div>
-        <div>
-          <label class="field-label">MAC address</label>
-          <input type="text" name="mac_address" placeholder="AA:BB:CC:DD:EE:FF" required>
-        </div>
-        <div>
-          <label class="field-label">IP address</label>
-          <input type="text" name="ip_address" placeholder="192.168.1.20" required>
-        </div>
+<div class="card">
+  <form method="post" action="{{ url_for('machine_add') }}">
+    <div class="form-grid">
+      <div>
+        <label class="field-label">Key</label>
+        <input type="text" name="key" placeholder="desktop-pc" required>
       </div>
-
-      <label class="field-label">Shutdown method</label>
-      <div class="shutdown-picker">
-        <input type="radio" id="type-none" name="shutdown_type" value="none" checked>
-        <label for="type-none">Wake only</label>
-        <input type="radio" id="type-proxmox" name="shutdown_type" value="proxmox">
-        <label for="type-proxmox">Proxmox node</label>
-        <input type="radio" id="type-ssh" name="shutdown_type" value="ssh">
-        <label for="type-ssh">SSH (plain PC)</label>
-
-        <div class="shutdown-fields proxmox-fields">
-          <div class="form-grid">
-            <div>
-              <label class="field-label">Proxmox host (API URL)</label>
-              <input type="text" name="proxmox_host" placeholder="https://192.168.1.10:8006">
-            </div>
-            <div>
-              <label class="field-label">Node name</label>
-              <input type="text" name="proxmox_node" placeholder="pve">
-            </div>
-            <div>
-              <label class="field-label">Token ID</label>
-              <input type="text" name="proxmox_token_id" placeholder="wol-daemon@pve!wol-daemon">
-            </div>
-            <div>
-              <label class="field-label">Token secret</label>
-              <input type="text" name="proxmox_token_secret" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx">
-            </div>
-          </div>
-          <label class="checkbox-row"><input type="checkbox" name="proxmox_verify_ssl">Verify TLS certificate (leave unchecked for a self-signed cert)</label>
-        </div>
-
-        <div class="shutdown-fields ssh-fields">
-          <div class="form-grid">
-            <div>
-              <label class="field-label">SSH host</label>
-              <input type="text" name="ssh_host" placeholder="defaults to IP address above">
-            </div>
-            <div>
-              <label class="field-label">SSH port</label>
-              <input type="number" name="ssh_port" placeholder="22">
-            </div>
-            <div>
-              <label class="field-label">Username</label>
-              <input type="text" name="ssh_username" placeholder="root">
-            </div>
-            <div>
-              <label class="field-label">Private key path</label>
-              <input type="text" name="ssh_private_key_path" placeholder="/config/ssh/desktop_key">
-            </div>
-          </div>
-          <div>
-            <label class="field-label">Shutdown command</label>
-            <input type="text" name="ssh_command" placeholder="shutdown -h +1" style="width: 100%;">
-          </div>
-        </div>
-      </div>
-
-      <div style="margin-top: 1.25rem;"><button type="submit" class="btn btn-primary">Add machine</button></div>
-    </form>
-  </div>
+    </div>
+    {% include "_machine_fields.html" %}
+    <div style="margin-top: 1.25rem;"><button type="submit" class="btn btn-primary">Add machine</button></div>
+  </form>
+</div>
 {% endblock %}

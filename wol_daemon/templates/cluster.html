@@ -49,10 +49,11 @@
   </div>
   <p class="form-hint muted">Woken top to bottom, shut down bottom to top, {{ cluster.delay_seconds }}s apart. Cluster rules run in addition to each machine's own rules.</p>
 
-  <details>
+  <details class="card-details">
     <summary><span class="btn btn-outline btn-sm">Edit cluster</span></summary>
     <div class="edit-panel">
       <form method="post" action="{{ url_for('cluster_edit', key=cluster.key) }}">
+        <p class="form-hint muted">Key: <code>{{ cluster.key }}</code> (can't be changed). Changes apply immediately, including to the cluster's scheduled actions.</p>
         {% include "_cluster_fields.html" %}
         <div style="margin-top: 1rem;"><button type="submit" class="btn btn-primary btn-sm">Save cluster</button></div>
       </form>
