@@ -189,8 +189,6 @@ def _parse_schedule(entries: list) -> list[ScheduleRule]:
 
 
 def _parse_machines(entries: list) -> list[Machine]:
-    if not entries:
-        raise ConfigError("At least one machine must be configured under 'machines'")
     machines = []
     seen_keys: set[str] = set()
     for i, entry in enumerate(entries):
@@ -251,8 +249,8 @@ def _config_from_env() -> dict | None:
     almost certainly a mistake rather than an intentional partial setup.
 
     This only ever produces one machine (key "default") — a list of machines
-    doesn't map cleanly onto a flat env var table, so multi-machine setups need
-    a mounted config.yaml instead. See docs/portainer-setup.md.
+    doesn't map cleanly onto a flat env var table. Further machines are added via
+    the web UI and kept alongside it, see load_config().
     """
     present = [name for name in _REQUIRED_ENV_VARS if os.environ.get(name)]
     if not present:
@@ -303,44 +301,43 @@ def load_config(path: str | Path) -> AppConfig:
     path = Path(path)
     env_config = _config_from_env()
 
+    # A missing file isn't an error: the daemon then starts with no machines, and adding
+    # the first one in the web UI creates the file.
+    raw: dict = {}
     if path.exists():
         with path.open(encoding="utf-8") as f:
             raw = yaml.safe_load(f) or {}
         if "machines" not in raw and "target" in raw:
             raw = _migrate_legacy(raw)
-        existing_machines = _parse_machines(raw.get("machines", []))
-    elif env_config is None:
-        raise ConfigError(
-            f"Config file not found: {path} (copy config.yaml.example and adjust it, "
-            "or set the WOL_* environment variables, see docs/portainer-setup.md)"
-        )
-    else:
-        raw = {}
-        existing_machines = []
+    machines = _parse_machines(raw.get("machines") or [])
 
-    if env_config is not None:
-        # Env vars always win for deployment settings (so a redeploy with a changed
-        # token/IP takes effect); the schedule is only ever managed via the web UI,
-        # so it's preserved from the existing file's "default" machine if there is one.
-        env_machine = env_config["machines"][0]
-        existing_by_key = {m.key: m for m in existing_machines}
-        if env_machine.key in existing_by_key:
-            env_machine.schedule = existing_by_key[env_machine.key].schedule
-        config = AppConfig(
-            machines=[env_machine],
-            status_check=env_config["status_check"],
-            wol=env_config["wol"],
-            notifications=env_config["notifications"],
-        )
-        save_config(config, path)
-    else:
-        config = AppConfig(
-            machines=existing_machines,
+    if env_config is None:
+        return AppConfig(
+            machines=machines,
             status_check=_parse_status_check(raw.get("status_check")),
             wol=_parse_wol(raw.get("wol")),
             notifications=_parse_notifications(raw.get("notifications")),
         )
 
+    # Env vars always win for their machine's deployment settings (so a redeploy with a
+    # changed token/IP takes effect). Its schedule and every other machine added via the
+    # web UI are kept from the existing file.
+    env_machine = env_config["machines"][0]
+    for i, machine in enumerate(machines):
+        if machine.key == env_machine.key:
+            env_machine.schedule = machine.schedule
+            machines[i] = env_machine
+            break
+    else:
+        machines.insert(0, env_machine)
+
+    config = AppConfig(
+        machines=machines,
+        status_check=env_config["status_check"],
+        wol=env_config["wol"],
+        notifications=env_config["notifications"],
+    )
+    save_config(config, path)
     return config
 
 

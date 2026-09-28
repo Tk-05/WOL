@@ -1,24 +1,19 @@
 # Deploying via Portainer
 
-The daemon can be configured either from a mounted `config.yaml` (see
-`config.yaml.example`) or from `WOL_*` environment variables. Portainer has a
-first-class UI for environment variables but none for arbitrary host files, so
-the env var route is the one that lets you do everything from the browser,
-with no SSH/SCP step at all.
+The simplest route needs no configuration in Portainer at all: deploy the
+stack without any `WOL_*` variables, open the web UI (`http://<host>:9090`)
+and add your machines there. The daemon starts with an empty configuration
+and writes `config.yaml` into the `wol-config` volume as soon as you add the
+first machine. This works for any number of machines, Proxmox and SSH alike.
 
-How this works: on every start, if the required `WOL_*` variables are set, the
-daemon builds its Proxmox/target/notification settings from them and writes
-the result to `config.yaml` inside the `wol-config` volume — so changing an
-env var and redeploying the stack (e.g. after rotating the Proxmox token)
-takes effect immediately. The **schedule** is the one exception: it's only
-ever managed through the daemon's own web UI (`http://<host>:9090`) and is
-preserved across redeploys, never overwritten by env vars.
-
-**This env var route only ever configures one machine.** If you want the
-daemon to manage more than one PC, skip straight to "Switching back to a
-file" below and use `config.yaml`'s `machines:` list instead — a list doesn't
-map cleanly onto Portainer's flat variable table, so multi-machine setups are
-YAML-only.
+Optionally, one Proxmox machine can instead be defined through `WOL_*`
+environment variables (step 3). On every start the daemon rebuilds that
+machine's settings from the variables, so changing a variable and
+redeploying (e.g. after rotating the Proxmox token) takes effect immediately.
+Its **schedule**, and any further machines you add in the web UI, are kept
+from `config.yaml` and never overwritten. As long as the variables are set,
+that machine can't be deleted permanently in the UI: it comes back on the
+next start.
 
 ## 1. Complete Phase 0 first
 
@@ -28,26 +23,43 @@ target MAC/IP before any of this works — see
 
 ## 2. Create the stack
 
-In Portainer: **Stacks → Add stack → Web editor**, paste the contents of
-[`docker-compose.yml`](../docker-compose.yml).
+In Portainer: **Stacks → Add stack**, then either:
 
-Since the web editor has no build context (no access to this repo's
-`Dockerfile`), `build: .` won't work there. Build the image once beforehand,
-either:
+- **Repository**: URL `https://github.com/Tk-05/WOL`, Compose path
+  `docker-compose.yml`, or
+- **Web editor**: paste the contents of
+  [`docker-compose.yml`](../docker-compose.yml).
 
-- on the Pi itself, from a checkout of this repo: `docker compose build`
-  (creates `wol-daemon:latest` locally, which Portainer will then use as-is), or
-- as a **Repository** stack instead of Web editor, if this project lives in a
-  git repo — Portainer clones it and has the build context available.
+Both work the same way, because the compose file doesn't build anything. It
+pulls the prebuilt image `ghcr.io/tk-05/wol:latest`, which GitHub Actions
+builds for amd64 and arm64 on every push to `main`
+([`.github/workflows/docker-publish.yml`](../.github/workflows/docker-publish.yml)).
 
-**If you use a Repository stack:** Portainer only clones the repo once, at
-stack creation. A plain "Update the stack" does **not** fetch new commits —
-it redeploys whatever was cloned initially. To pick up a newer commit (e.g.
-after pulling a fix into this project), use the stack's **"Pull and
-redeploy"** action (not the plain update button), or delete and recreate the
-stack against the same repo URL to force a fresh clone.
+**Don't add `build:` back to the compose file.** On nodes connected through a
+Portainer Edge Agent, Portainer can't build images at all: the agent proxies
+Docker API calls to the node, and that proxy can't pass through the HTTP/2
+protocol upgrade BuildKit needs. The deploy fails with
+`listing workers for Build: ... http2: frame too large, note that the frame
+header looked like an HTTP/1.1 header`, and the agent logs
+`Error copying response body from proxied request`. Pulling a finished image
+is a normal API call and works fine through the agent.
 
-## 3. Fill in the environment variables
+**Updating to a new version:** after a push to `main`, wait for the workflow
+run to finish, then redeploy the stack in Portainer. `pull_policy: always`
+makes every deploy fetch the newest `:latest`. For a **Repository** stack,
+use **"Pull and redeploy"** rather than the plain update button: Portainer
+only clones the repo once, so without it, changes to the compose file itself
+(e.g. new environment variables) wouldn't be picked up.
+
+**One-time step when publishing for the first time:** GitHub creates new
+container packages as private, even for a public repo. After the first
+successful workflow run, open the package on GitHub (your profile →
+**Packages → wol → Package settings**) and change its visibility to
+**Public**. Otherwise every node needs registry credentials to pull it.
+
+## 3. Optional: fill in the environment variables
+
+Skip this step if you'd rather add all machines in the web UI.
 
 **Important:** Portainer's stack-level "Environment variables" section only
 fills in `${VAR}` placeholders during compose interpolation — it does not
@@ -58,7 +70,7 @@ to a literal value while editing the stack, Portainer's variable table will
 silently stop having any effect on it and the container will start with an
 empty value instead.
 
-In the stack's **Environment variables** section, set at minimum:
+In the stack's **Environment variables** section, set all of these:
 
 | Variable | Example | Notes |
 | --- | --- | --- |
@@ -80,15 +92,16 @@ If any of the six required variables above is missing while at least one is
 set, the daemon refuses to start with a clear error naming the missing ones —
 it won't silently fall back to a half-configured state.
 
-## 4. Deploy and add the schedule
+## 4. Deploy, add machines and schedules
 
 Deploy the stack. Portainer creates the `wol-config` named volume
 automatically — no host filesystem access needed.
 
-Open `http://<pi-ip>:9090` and add your schedule rules there (the "New rule"
-form at the bottom of the page). This is the same UI regardless of how you
-deployed — file-based or env-based — and it's the only place the schedule is
-ever edited.
+Open `http://<pi-ip>:9090`. Without environment variables you'll see "No
+machines configured yet"; use **Add your first machine**. Then add schedule
+rules on each machine's page (the "New rule" form at the bottom). This is the
+same UI regardless of how you deployed, and it's the only place the schedule
+is ever edited.
 
 ## Rotating a secret or changing the target
 
@@ -114,10 +127,10 @@ everything except the schedule — see the precedence note in
 
 ## Multiple machines, and SSH-based shutdown
 
-Each entry under `machines:` in `config.yaml` gets its own page in the web UI
-(`http://<host>:9090/machines/<key>`); the root page becomes an overview
-listing all of them once there's more than one. See the two worked examples
-(Proxmox and SSH) in `config.yaml.example`.
+Machines added in the web UI are stored under `machines:` in `config.yaml`
+(see the two worked examples, Proxmox and SSH, in `config.yaml.example`). Each
+gets its own page (`http://<host>:9090/machines/<key>`); the root page becomes
+an overview listing all of them once there's more than one.
 
 For a plain PC shut down over SSH, the private key file needs to be readable
 inside the container. Put it in the same volume as `config.yaml` — e.g. bind

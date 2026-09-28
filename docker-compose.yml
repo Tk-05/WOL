@@ -1,7 +1,11 @@
 services:
   wol-daemon:
-    build: .
-    image: wol-daemon:latest
+    # Prebuilt by .github/workflows/docker-publish.yml on every push to main. There is
+    # deliberately no `build:` here: Portainer can't build through an Edge Agent (the agent's
+    # proxy can't pass through BuildKit's HTTP/2 upgrade), so every node pulls this instead.
+    image: ghcr.io/tk-05/wol:latest
+    # Fetch the newest :latest on every deploy, so a redeploy in Portainer picks up updates.
+    pull_policy: always
     container_name: wol-daemon
     restart: unless-stopped
     # Host networking isn't a nice-to-have here, it's a requirement: the magic packet broadcast

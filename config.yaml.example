@@ -1,10 +1,10 @@
 # This file is for running the daemon directly (Phase 0/1, e.g. via systemd) or for
-# a Docker deployment where you'd rather manage a file than environment variables.
-# Deploying via Portainer with a single machine? You can skip this file entirely and use
-# WOL_* environment variables instead — see docs/portainer-setup.md. Env vars always take
-# precedence over this file for that one machine if both are present; only its schedule is
-# exempt (always managed via the web UI, never overwritten by env vars). Multiple machines
-# can only be configured here, not via environment variables.
+# a Docker deployment where you'd rather manage a file than use the web UI.
+# You don't have to write it by hand: if it doesn't exist, the daemon starts with no
+# machines, and adding machines in the web UI creates it — see docs/portainer-setup.md.
+# One Proxmox machine can alternatively come from WOL_* environment variables; those take
+# precedence over this file for that one machine. Its schedule and all other machines are
+# always kept from this file.
 
 # One entry per machine you want the daemon to manage. Each needs:
 #   key          stable id used in URLs, lowercase letters/digits/hyphens only

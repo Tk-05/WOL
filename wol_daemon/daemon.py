@@ -85,6 +85,8 @@ def main() -> None:
     )
     scheduler.start()
     logger.info("WOL daemon started, %d machine(s) loaded", len(config.machines))
+    if not config.machines:
+        logger.warning("No machines configured yet (%s is missing or empty) - add one in the web UI", config_path)
 
     app = create_app(config_path, config, scheduler, event_log, turn_on, turn_off, on_rule_skipped)
 
