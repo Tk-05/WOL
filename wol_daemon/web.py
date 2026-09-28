@@ -67,6 +67,10 @@ def create_app(
     app.config["MAX_CONTENT_LENGTH"] = 1024 * 1024  # config imports are tiny; refuse anything big
     app.json.sort_keys = False  # keep the API's field order as documented in docs/api.md
 
+    @app.context_processor
+    def template_globals():
+        return {"timezone": str(scheduler.timezone)}
+
     def get_machine(key: str) -> Machine | None:
         return next((m for m in config.machines if m.key == key), None)
 

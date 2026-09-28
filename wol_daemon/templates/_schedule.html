@@ -1,6 +1,7 @@
 {# Shared schedule table + new-rule form. Expects: schedule, day_options, owner_key, and
    sched_ep = "schedule" (machine) or "cluster_schedule" (cluster) as the endpoint prefix. #}
 <h2>Schedule</h2>
+<p class="form-hint muted">Times are in {{ timezone }}.</p>
 <div class="table-wrap">
   <table>
     <thead><tr><th>Name</th><th>Days</th><th>Time</th><th>Action</th><th></th></tr></thead>

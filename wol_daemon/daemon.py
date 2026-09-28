@@ -163,7 +163,8 @@ def main() -> None:
     scheduler = build_scheduler(config, **scheduled_callbacks)
     scheduler.start()
     logger.info(
-        "WOL daemon started, %d machine(s) and %d cluster(s) loaded", len(config.machines), len(config.clusters)
+        "WOL daemon started, %d machine(s) and %d cluster(s) loaded, schedule timezone %s",
+        len(config.machines), len(config.clusters), scheduler.timezone,
     )
     if not config.machines:
         logger.warning("No machines configured yet (%s is missing or empty) - add one in the web UI", config_path)

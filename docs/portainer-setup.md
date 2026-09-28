@@ -103,6 +103,15 @@ rules on each machine's page (the "New rule" form at the bottom). This is the
 same UI regardless of how you deployed, and it's the only place the schedule
 is ever edited.
 
+## Timezone
+
+Schedule times are interpreted in the container's timezone, which the compose
+file sets to `Europe/Berlin`. To use another one, add a `TZ` variable (e.g.
+`America/New_York`) to the stack's environment variables and redeploy. The
+timezone in use is shown above every schedule in the web UI and in the first
+log line after startup. `docker exec wol-daemon date` should print local time,
+not UTC.
+
 ## Rotating a secret or changing the target
 
 Update the relevant `WOL_*` variable in the stack's environment variables and

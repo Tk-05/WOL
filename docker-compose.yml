@@ -18,6 +18,8 @@ services:
     # Portainer's env var table actually substitute into the container — a hardcoded value
     # here would silently ignore whatever you set in Portainer's UI. See docs/portainer-setup.md.
     environment:
+      # Schedule times are interpreted in this timezone. Without it the container runs in UTC.
+      TZ: "${TZ:-Europe/Berlin}"
       WOL_PROXMOX_HOST: "${WOL_PROXMOX_HOST:-}"
       WOL_PROXMOX_NODE: "${WOL_PROXMOX_NODE:-}"
       WOL_PROXMOX_TOKEN_ID: "${WOL_PROXMOX_TOKEN_ID:-}"
