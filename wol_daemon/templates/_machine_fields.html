@@ -39,8 +39,13 @@
       </div>
       <div>
         <label class="field-label">Token secret</label>
-        <input type="password" name="proxmox_token_secret" autocomplete="off"
-               placeholder="{{ 'unchanged – leave empty to keep' if form.has_secret else 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx' }}">
+        <div class="secret-row">
+          <input type="password" name="proxmox_token_secret" id="token-secret" autocomplete="off"
+                 placeholder="{{ 'unchanged – leave empty to keep' if form.has_secret else 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx' }}">
+          {% if form.has_secret and token_url %}
+          <button type="button" class="btn btn-outline btn-sm" id="token-reveal" data-url="{{ token_url }}">Show</button>
+          {% endif %}
+        </div>
       </div>
     </div>
     <label class="checkbox-row"><input type="checkbox" name="proxmox_verify_ssl" {{ 'checked' if form.proxmox_verify_ssl else '' }}>Verify TLS certificate (leave unchecked for a self-signed cert)</label>
@@ -71,3 +76,42 @@
     </div>
   </div>
 </div>
+
+{% if form.has_secret and token_url %}
+<script>
+  // Fetches the secret only when asked for, so it's never part of the page itself, and without
+  // a page reload, so unsaved changes in this form survive.
+  (function () {
+    var button = document.getElementById("token-reveal");
+    var input = document.getElementById("token-secret");
+    function show() {
+      input.type = "text";
+      button.textContent = "Hide";
+    }
+    button.addEventListener("click", function () {
+      if (input.type === "text") {
+        input.type = "password";
+        button.textContent = "Show";
+        return;
+      }
+      if (input.value) {
+        show();
+        return;
+      }
+      fetch(button.dataset.url, { cache: "no-store" })
+        .then(function (response) {
+          if (!response.ok) throw new Error(response.status);
+          return response.json();
+        })
+        .then(function (data) {
+          input.value = data.token_secret;
+          show();
+        })
+        .catch(function () {
+          button.textContent = "Unavailable";
+          button.disabled = true;
+        });
+    });
+  })();
+</script>
+{% endif %}

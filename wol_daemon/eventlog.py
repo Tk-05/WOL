@@ -18,14 +18,22 @@ class ActionRecord:
 
 
 class EventLog:
-    def __init__(self, max_events: int = 200):
+    """In-memory log: one global list for the overview, plus one per machine/cluster.
+    Log records are routed to owners via logging's extra={"owners": [...]}."""
+
+    def __init__(self, max_events: int = 200, max_per_owner: int = 50):
         self._lock = Lock()
         self._events: deque[str] = deque(maxlen=max_events)
+        self._owner_events: dict[str, deque[str]] = {}
+        self._max_per_owner = max_per_owner
         self._last_actions: dict[str, ActionRecord] = {}
 
-    def add_event(self, message: str) -> None:
+    def add_event(self, message: str, owners: list[str] | tuple[str, ...] = ()) -> None:
+        line = f"{datetime.now():%Y-%m-%d %H:%M:%S}  {message}"
         with self._lock:
-            self._events.append(f"{datetime.now():%Y-%m-%d %H:%M:%S}  {message}")
+            self._events.append(line)
+            for owner in owners:
+                self._owner_events.setdefault(owner, deque(maxlen=self._max_per_owner)).append(line)
 
     def record_action(self, machine_key: str, action: str, source: str, result: str, detail: str = "") -> None:
         with self._lock:
@@ -39,6 +47,16 @@ class EventLog:
         with self._lock:
             return list(self._events)[-limit:][::-1]
 
+    def recent_events_for(self, owner: str, limit: int = 30) -> list[str]:
+        with self._lock:
+            return list(self._owner_events.get(owner, ()))[-limit:][::-1]
+
+    def forget(self, owner: str) -> None:
+        """Drop a deleted machine's/cluster's history, so a new one reusing the key starts clean."""
+        with self._lock:
+            self._owner_events.pop(owner, None)
+            self._last_actions.pop(owner, None)
+
 
 class EventLogHandler(logging.Handler):
     def __init__(self, event_log: EventLog):
@@ -46,4 +64,4 @@ class EventLogHandler(logging.Handler):
         self._event_log = event_log
 
     def emit(self, record: logging.LogRecord) -> None:
-        self._event_log.add_event(self.format(record))
+        self._event_log.add_event(self.format(record), getattr(record, "owners", ()))

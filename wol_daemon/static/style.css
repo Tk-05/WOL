@@ -157,7 +157,7 @@ details[open] summary { margin-bottom: 0.75rem; }
 
 label.field-label { display: block; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); margin-bottom: 0.3rem; }
 
-input[type="text"], input[type="time"], input[type="number"], input[type="file"], select {
+input[type="text"], input[type="password"], input[type="time"], input[type="number"], input[type="file"], select {
   font: inherit;
   font-size: 0.88rem;
   padding: 0.42rem 0.6rem;
@@ -166,7 +166,7 @@ input[type="text"], input[type="time"], input[type="number"], input[type="file"]
   background: var(--surface);
   color: var(--text);
 }
-input[type="text"]:focus, input[type="time"]:focus, input[type="number"]:focus, select:focus {
+input[type="text"]:focus, input[type="password"]:focus, input[type="time"]:focus, input[type="number"]:focus, select:focus {
   outline: 2px solid var(--primary);
   outline-offset: 1px;
 }
@@ -206,6 +206,10 @@ input[type="text"]:focus, input[type="time"]:focus, input[type="number"]:focus, 
 
 .form-hint { font-size: 0.8rem; margin: 0.4rem 0 0.75rem; }
 .card-details { margin-top: 1rem; }
+.panel-heading { font-size: 0.72rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); margin: 1.4rem 0 0.4rem; }
+.log-sm { max-height: 180px; font-size: 0.74rem; }
+.secret-row { display: flex; gap: 0.4rem; align-items: center; }
+.secret-row input { flex: 1; min-width: 0; }
 .edit-panel .form-hint:first-child { margin-top: 0; }
 .card .form-hint:last-child { margin-bottom: 0; }
 .card-text { margin: 0 0 0.9rem; font-size: 0.9rem; }

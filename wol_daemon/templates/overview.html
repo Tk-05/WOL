@@ -40,9 +40,11 @@
     </dl>
     <div class="actions-row">
       <form class="inline" method="post" action="{{ url_for('cluster_action', key=cluster.key, action='on') }}">
+        <input type="hidden" name="next" value="{{ url_for('index') }}">
         <button type="submit" class="btn btn-primary btn-sm" {{ 'disabled' if not cluster.members else '' }}>Wake all</button>
       </form>
       <form class="inline" method="post" action="{{ url_for('cluster_action', key=cluster.key, action='off') }}" onsubmit="return confirm('Shut down all machines in this cluster?')">
+        <input type="hidden" name="next" value="{{ url_for('index') }}">
         <button type="submit" class="btn btn-outline-danger btn-sm" {{ 'disabled' if not cluster.members else '' }}>Shut down all</button>
       </form>
       <a class="btn btn-outline btn-sm" href="{{ url_for('cluster_detail', key=cluster.key) }}">Manage</a>
@@ -75,9 +77,11 @@
     </dl>
     <div class="actions-row">
       <form class="inline" method="post" action="{{ url_for('machine_action', key=machine.key, action='on') }}">
+        <input type="hidden" name="next" value="{{ url_for('index') }}">
         <button type="submit" class="btn btn-primary btn-sm">Wake now</button>
       </form>
       <form class="inline" method="post" action="{{ url_for('machine_action', key=machine.key, action='off') }}">
+        <input type="hidden" name="next" value="{{ url_for('index') }}">
         <button type="submit" class="btn btn-outline-danger btn-sm" {{ 'disabled' if not machine.has_shutdown else '' }}>Shut down now</button>
       </form>
       <a class="btn btn-outline btn-sm" href="{{ url_for('machine_detail', key=machine.key) }}">Manage schedule</a>

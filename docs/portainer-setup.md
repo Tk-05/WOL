@@ -135,8 +135,11 @@ an overview listing all of them once there's more than one.
 **Edit machine** and **Edit cluster** on those pages change everything except
 the key, and take effect immediately, including for already scheduled and
 running actions; no restart needed. When editing a Proxmox machine, leave the
-token secret empty to keep the current one. The machine defined by `WOL_*`
-environment variables can't be edited in the UI while they're set.
+token secret empty to keep the current one, or use **Show** to display it. The
+machine defined by `WOL_*` environment variables can't be edited in the UI
+while they're set. Each machine and cluster page also shows its own event log
+(wake-ups, shutdowns, failures, and changes to its settings and rules), kept in
+memory since the daemon last started.
 
 For a plain PC shut down over SSH, the private key file needs to be readable
 inside the container. Put it in the same volume as `config.yaml` — e.g. bind
@@ -153,6 +156,11 @@ between, e.g. the NAS first on and last off so the Proxmox nodes find their
 storage. A cluster has its own schedule, which runs in addition to each
 member's own rules. Deleting a machine removes it from its clusters; deleting a
 cluster keeps its machines.
+
+## Status for other services
+
+Home Assistant, Uptime Kuma and similar can read the status of every machine and
+cluster as JSON, e.g. `http://<host>:9090/api/machines/<key>`. See [api.md](api.md).
 
 ## Export and import
 

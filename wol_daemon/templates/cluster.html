@@ -49,6 +49,8 @@
   </div>
   <p class="form-hint muted">Woken top to bottom, shut down bottom to top, {{ cluster.delay_seconds }}s apart. Cluster rules run in addition to each machine's own rules.</p>
 
+  {% include "_owner_log.html" %}
+
   <details class="card-details">
     <summary><span class="btn btn-outline btn-sm">Edit cluster</span></summary>
     <div class="edit-panel">

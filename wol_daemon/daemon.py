@@ -34,33 +34,50 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name
 logger = logging.getLogger("wol_daemon")
 
 
-def turn_on(config: AppConfig, machine: Machine, event_log: EventLog, scheduler: BackgroundScheduler, source: str = "schedule") -> None:
+def turn_on(
+    config: AppConfig,
+    machine: Machine,
+    event_log: EventLog,
+    scheduler: BackgroundScheduler,
+    source: str = "schedule",
+    log_owners: tuple[str, ...] = (),
+) -> None:
+    """log_owners: further event logs (e.g. the triggering cluster's) that get these lines too."""
+    owners = (machine.key, *log_owners)
+    extra = {"owners": owners}
     if is_host_up(machine.ip_address, config.status_check.timeout_seconds):
-        logger.info("'%s' is already reachable, no magic packet needed", machine.name)
+        logger.info("'%s' is already reachable, no magic packet needed", machine.name, extra=extra)
         event_log.record_action(machine.key, "on", source, "skipped", "already online")
         return
-    logger.info("Sending magic packet to '%s' (%s)", machine.name, machine.mac_address)
+    logger.info("Sending magic packet to '%s' (%s)", machine.name, machine.mac_address, extra=extra)
     send_magic_packet(machine.mac_address)
     event_log.record_action(machine.key, "on", source, "ok")
-    schedule_wake_check(scheduler, config, machine, event_log)
+    schedule_wake_check(scheduler, config, machine, event_log, owners)
 
 
-def turn_off(config: AppConfig, machine: Machine, event_log: EventLog, source: str = "schedule") -> None:
+def turn_off(
+    config: AppConfig,
+    machine: Machine,
+    event_log: EventLog,
+    source: str = "schedule",
+    log_owners: tuple[str, ...] = (),
+) -> None:
+    extra = {"owners": (machine.key, *log_owners)}
     if not is_host_up(machine.ip_address, config.status_check.timeout_seconds):
-        logger.info("'%s' is already offline, no shutdown needed", machine.name)
+        logger.info("'%s' is already offline, no shutdown needed", machine.name, extra=extra)
         event_log.record_action(machine.key, "off", source, "skipped", "already offline")
         return
 
     if machine.shutdown is None:
-        logger.warning("'%s' has no shutdown method configured, cannot power it off", machine.name)
+        logger.warning("'%s' has no shutdown method configured, cannot power it off", machine.name, extra=extra)
         event_log.record_action(machine.key, "off", source, "error", "no shutdown method configured")
         return
 
-    logger.info("Shutting down '%s'", machine.name)
+    logger.info("Shutting down '%s'", machine.name, extra=extra)
     try:
         _shutdown_client(machine.shutdown).shutdown_node()
     except (requests.RequestException, SshShutdownError) as exc:
-        logger.exception("Shutdown failed for '%s'", machine.name)
+        logger.exception("Shutdown failed for '%s'", machine.name, extra=extra)
         event_log.record_action(machine.key, "off", source, "error", str(exc))
         send_notification(config.notifications, f"Shutdown failed for '{machine.name}' ({machine.ip_address}): {exc}")
         return
@@ -88,19 +105,25 @@ def cluster_action(
     if action == "off":
         members.reverse()
 
+    cluster_owner = owner_event_key(cluster)
     verb = "waking" if action == "on" else "shutting down"
-    logger.info("Cluster '%s': %s %d machine(s), %ds apart", cluster.name, verb, len(members), cluster.delay_seconds)
+    logger.info(
+        "Cluster '%s': %s %d machine(s), %ds apart", cluster.name, verb, len(members), cluster.delay_seconds,
+        extra={"owners": (cluster_owner,)},
+    )
     event_log.record_action(
-        owner_event_key(cluster), action, source, "started", f"{len(members)} machine(s), {cluster.delay_seconds}s apart"
+        cluster_owner, action, source, "started", f"{len(members)} machine(s), {cluster.delay_seconds}s apart"
     )
 
     step_source = f"cluster:{cluster.key}"
     start = datetime.now()
     for i, machine in enumerate(members):
         if action == "on":
-            step = functools.partial(turn_on, config, machine, event_log, scheduler, step_source)
+            step = functools.partial(
+                turn_on, config, machine, event_log, scheduler, step_source, log_owners=(cluster_owner,)
+            )
         else:
-            step = functools.partial(turn_off, config, machine, event_log, step_source)
+            step = functools.partial(turn_off, config, machine, event_log, step_source, log_owners=(cluster_owner,))
         # No misfire limit: a step must not be dropped just because the scheduler ran it late.
         scheduler.add_job(
             step,
@@ -113,8 +136,12 @@ def cluster_action(
 def on_rule_skipped(
     owner: Machine | Cluster, rule: ScheduleRule, config: AppConfig, config_path: Path, event_log: EventLog
 ) -> None:
-    logger.info("Skipping scheduled '%s' for '%s' rule '%s' (skip requested)", rule.action, owner.name, rule.name)
-    event_log.record_action(owner_event_key(owner), rule.action, "schedule", "skipped", f"skipped by user ({rule.name})")
+    owner_key = owner_event_key(owner)
+    logger.info(
+        "Skipping scheduled '%s' for '%s' rule '%s' (skip requested)", rule.action, owner.name, rule.name,
+        extra={"owners": (owner_key,)},
+    )
+    event_log.record_action(owner_key, rule.action, "schedule", "skipped", f"skipped by user ({rule.name})")
     save_config(config, config_path)
 
 

@@ -14,9 +14,15 @@ from .status import is_host_up
 logger = logging.getLogger("wol_daemon")
 
 
-def schedule_wake_check(scheduler: BackgroundScheduler, config: AppConfig, machine: Machine, event_log: EventLog) -> None:
+def schedule_wake_check(
+    scheduler: BackgroundScheduler,
+    config: AppConfig,
+    machine: Machine,
+    event_log: EventLog,
+    log_owners: tuple[str, ...] = (),
+) -> None:
     scheduler.add_job(
-        lambda: _verify_wake(scheduler, config, machine, event_log, config.wol.max_retries),
+        lambda: _verify_wake(scheduler, config, machine, event_log, config.wol.max_retries, log_owners),
         trigger="date",
         run_date=datetime.now() + timedelta(seconds=config.wol.verify_after_seconds),
     )
@@ -28,24 +34,27 @@ def _verify_wake(
     machine: Machine,
     event_log: EventLog,
     remaining_retries: int,
+    log_owners: tuple[str, ...],
 ) -> None:
+    extra = {"owners": log_owners or (machine.key,)}
     if is_host_up(machine.ip_address, config.status_check.timeout_seconds):
-        logger.info("'%s' reachable after wake attempt", machine.name)
+        logger.info("'%s' reachable after wake attempt", machine.name, extra=extra)
         return
 
     if remaining_retries <= 0:
         message = f"WOL failed: '{machine.name}' ({machine.ip_address}) unreachable after multiple attempts"
-        logger.error(message)
+        logger.error(message, extra=extra)
         event_log.record_action(machine.key, "on", "watchdog", "error", "unreachable after retries")
         send_notification(config.notifications, message)
         return
 
     logger.warning(
-        "'%s' still not reachable, resending magic packet (%d attempt(s) left)", machine.name, remaining_retries
+        "'%s' still not reachable, resending magic packet (%d attempt(s) left)", machine.name, remaining_retries,
+        extra=extra,
     )
     send_magic_packet(machine.mac_address)
     scheduler.add_job(
-        lambda: _verify_wake(scheduler, config, machine, event_log, remaining_retries - 1),
+        lambda: _verify_wake(scheduler, config, machine, event_log, remaining_retries - 1, log_owners),
         trigger="date",
         run_date=datetime.now() + timedelta(seconds=config.wol.retry_interval_seconds),
     )

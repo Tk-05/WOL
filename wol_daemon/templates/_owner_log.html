@@ -1,0 +1,5 @@
+{# Event log of one machine or cluster, shown in its status card. Expects `owner_events`. #}
+<div class="panel-heading">Event log</div>
+<div class="log log-sm">
+  {% for line in owner_events %}{{ line }}<br>{% else %}<span class="muted">No events since the daemon last started.</span>{% endfor %}
+</div>

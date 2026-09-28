@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import re
 import secrets
 from concurrent.futures import ThreadPoolExecutor
@@ -8,7 +9,7 @@ from pathlib import Path
 from typing import Callable
 
 from apscheduler.schedulers.background import BackgroundScheduler
-from flask import Flask, Response, flash, redirect, render_template, request, url_for
+from flask import Flask, Response, abort, flash, jsonify, redirect, render_template, request, url_for
 
 from .config import (
     AppConfig,
@@ -37,6 +38,18 @@ _MAC_RE = re.compile(r"^[0-9A-Fa-f]{2}([:-]?[0-9A-Fa-f]{2}){5}$")
 _DAY_ORDER = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
 _DAY_LABELS = {"mon": "Mon", "tue": "Tue", "wed": "Wed", "thu": "Thu", "fri": "Fri", "sat": "Sat", "sun": "Sun"}
 _DAY_OPTIONS = [(code, _DAY_LABELS[code]) for code in _DAY_ORDER]
+_ACTION_MESSAGES = {
+    ("on", "ok"): ("success", "Wake-up sent to '{name}'"),
+    ("on", "skipped"): ("success", "'{name}' is already online"),
+    ("off", "ok"): ("success", "Shutdown sent to '{name}'"),
+    ("off", "skipped"): ("success", "'{name}' is already offline"),
+}
+
+logger = logging.getLogger("wol_daemon")
+
+
+def _log(owner: str | None, message: str, *args) -> None:
+    logger.info(message, *args, extra={"owners": (owner,) if owner else ()})
 
 
 def create_app(
@@ -52,6 +65,7 @@ def create_app(
     app = Flask(__name__)
     app.secret_key = secrets.token_hex(16)
     app.config["MAX_CONTENT_LENGTH"] = 1024 * 1024  # config imports are tiny; refuse anything big
+    app.json.sort_keys = False  # keep the API's field order as documented in docs/api.md
 
     def get_machine(key: str) -> Machine | None:
         return next((m for m in config.machines if m.key == key), None)
@@ -71,7 +85,8 @@ def create_app(
             results = list(pool.map(lambda m: is_host_up(m.ip_address, timeout), machines))
         return {m.key: up for m, up in zip(machines, results)}
 
-    def next_action_info(prefix: str, schedule: list[ScheduleRule]) -> str | None:
+    def next_run(prefix: str, schedule: list[ScheduleRule]):
+        """The owner's soonest scheduled job, its rule (if still present) and whether it's skipped."""
         jobs = [
             j for j in scheduler.get_jobs()
             if j.id.startswith(prefix) and getattr(j, "next_run_time", None) is not None
@@ -79,11 +94,76 @@ def create_app(
         if not jobs:
             return None
         job = min(jobs, key=lambda j: j.next_run_time)
-        text = f"{job.name} — {job.next_run_time.strftime('%a %d %b %H:%M')}"
         index = int(job.id[len(prefix):])
-        if 0 <= index < len(schedule) and schedule[index].skip_date == job.next_run_time.date().isoformat():
-            text += " (will be skipped)"
-        return text
+        rule = schedule[index] if 0 <= index < len(schedule) else None
+        will_skip = rule is not None and rule.skip_date == job.next_run_time.date().isoformat()
+        return job, rule, will_skip
+
+    def next_action_info(prefix: str, schedule: list[ScheduleRule]) -> str | None:
+        found = next_run(prefix, schedule)
+        if found is None:
+            return None
+        job, _, will_skip = found
+        text = f"{job.name} — {job.next_run_time.strftime('%a %d %b %H:%M')}"
+        return text + " (will be skipped)" if will_skip else text
+
+    def next_action_json(prefix: str, schedule: list[ScheduleRule]) -> dict | None:
+        found = next_run(prefix, schedule)
+        if found is None:
+            return None
+        job, rule, will_skip = found
+        return {
+            "rule": job.name,
+            "action": rule.action if rule else None,
+            "time": job.next_run_time.isoformat(timespec="seconds"),
+            "will_be_skipped": will_skip,
+        }
+
+    def last_action_json(event_key: str) -> dict | None:
+        record = event_log.last_action_for(event_key)
+        if record is None:
+            return None
+        return {
+            "time": record.timestamp.astimezone().isoformat(timespec="seconds"),
+            "action": record.action,
+            "source": record.source,
+            "result": record.result,
+            "detail": record.detail,
+        }
+
+    def machine_json(machine: Machine, online: bool) -> dict:
+        return {
+            "key": machine.key,
+            "name": machine.name,
+            "online": online,
+            "ip_address": machine.ip_address,
+            "mac_address": machine.mac_address,
+            "shutdown_method": _shutdown_method(machine),
+            "clusters": [c.key for c in config.clusters if machine.key in c.members],
+            "last_action": last_action_json(machine.key),
+            "next_action": next_action_json(machine_job_prefix(machine), machine.schedule),
+        }
+
+    def cluster_json(cluster: Cluster, status: dict[str, bool]) -> dict:
+        members = [m for m in (get_machine(key) for key in cluster.members) if m is not None]
+        online = sum(1 for m in members if status.get(m.key))
+        if members and online == len(members):
+            state = "on"
+        elif online == 0:
+            state = "off"
+        else:
+            state = "partial"
+        return {
+            "key": cluster.key,
+            "name": cluster.name,
+            "state": state,
+            "online": online,
+            "total": len(members),
+            "delay_seconds": cluster.delay_seconds,
+            "members": [{"key": m.key, "name": m.name, "online": status.get(m.key, False)} for m in members],
+            "last_action": last_action_json(owner_event_key(cluster)),
+            "next_action": next_action_json(cluster_job_prefix(cluster), cluster.schedule),
+        }
 
     def last_action_str(event_key: str) -> str | None:
         record = event_log.last_action_for(event_key)
@@ -147,6 +227,7 @@ def create_app(
         owner.schedule.append(rule)
         save_config(config, config_path)
         rebuild_jobs()
+        _log(owner_event_key(owner), "'%s': rule '%s' added (%s)", owner.name, rule.name, _rule_summary(rule))
         flash("Rule added", "success")
         return redirect(back)
 
@@ -162,14 +243,16 @@ def create_app(
         owner.schedule[index] = rule
         save_config(config, config_path)
         rebuild_jobs()
+        _log(owner_event_key(owner), "'%s': rule '%s' changed (%s)", owner.name, rule.name, _rule_summary(rule))
         flash("Rule saved", "success")
         return redirect(back)
 
     def delete_rule(owner: Machine | Cluster, index: int, back: str):
         if 0 <= index < len(owner.schedule):
-            del owner.schedule[index]
+            rule = owner.schedule.pop(index)
             save_config(config, config_path)
             rebuild_jobs()
+            _log(owner_event_key(owner), "'%s': rule '%s' deleted", owner.name, rule.name)
             flash("Rule deleted", "success")
         return redirect(back)
 
@@ -180,6 +263,7 @@ def create_app(
         rule = owner.schedule[index]
         if rule.skip_date is not None:
             rule.skip_date = None
+            _log(owner_event_key(owner), "'%s': skip of rule '%s' cancelled", owner.name, rule.name)
             flash("Skip cancelled", "success")
         else:
             job = scheduler.get_job(job_id)
@@ -187,6 +271,7 @@ def create_app(
                 flash("No upcoming run to skip", "error")
                 return redirect(back)
             rule.skip_date = job.next_run_time.date().isoformat()
+            _log(owner_event_key(owner), "'%s': rule '%s' will be skipped on %s", owner.name, rule.name, rule.skip_date)
             flash(f"Next run of '{rule.name}' will be skipped", "success")
         save_config(config, config_path)
         return redirect(back)
@@ -202,6 +287,24 @@ def create_app(
         if cluster is None:
             flash("Cluster not found", "error")
         return cluster
+
+    def redirect_back(default: str):
+        """Return to the page a form was submitted from (e.g. the overview), if it said so."""
+        target = request.form.get("next", "")
+        # Only a local path: a full URL or "//host" here would turn this into an open redirect.
+        if target.startswith("/") and not target.startswith("//") and "\\" not in target:
+            return redirect(target)
+        return redirect(default)
+
+    def flash_action_result(machine: Machine) -> None:
+        record = event_log.last_action_for(machine.key)
+        if record is None:
+            return
+        if record.result == "error":
+            flash(f"'{machine.name}': {record.detail}", "error")
+            return
+        category, template = _ACTION_MESSAGES.get((record.action, record.result), ("success", "Done"))
+        flash(template.format(name=machine.name), category)
 
     # --- Overview ---
 
@@ -231,6 +334,7 @@ def create_app(
         config.machines.append(machine)
         save_config(config, config_path)
         rebuild_jobs()
+        _log(machine.key, "Machine '%s' added", machine.name)
         flash(f"Machine '{machine.name}' added", "success")
         return redirect(url_for("machine_detail", key=machine.key))
 
@@ -243,8 +347,11 @@ def create_app(
         for cluster in config.clusters:
             if key in cluster.members:
                 cluster.members.remove(key)
+                _log(owner_event_key(cluster), "'%s' removed from cluster '%s' (machine deleted)", machine.name, cluster.name)
         save_config(config, config_path)
         rebuild_jobs()
+        event_log.forget(key)
+        _log(None, "Machine '%s' deleted", machine.name)
         flash(f"Machine '{machine.name}' deleted", "success")
         return redirect(url_for("index"))
 
@@ -263,7 +370,20 @@ def create_app(
             sched_ep="schedule",
             form=_machine_form_values(machine),
             env_locked=is_env_machine(machine),
+            owner_events=event_log.recent_events_for(machine.key),
+            token_url=url_for("machine_token", key=key) if isinstance(machine.shutdown, ProxmoxShutdown) else None,
         )
+
+    @app.route("/machines/<key>/token")
+    def machine_token(key: str):
+        """The Proxmox token secret is only ever sent on explicit request ('Show' button),
+        never embedded in a page."""
+        machine = get_machine(key)
+        if machine is None or not isinstance(machine.shutdown, ProxmoxShutdown):
+            abort(404)
+        response = jsonify(token_id=machine.shutdown.token_id, token_secret=machine.shutdown.token_secret)
+        response.headers["Cache-Control"] = "no-store"
+        return response
 
     @app.post("/machines/<key>/edit")
     def machine_edit(key: str):
@@ -279,6 +399,15 @@ def create_app(
         except ConfigError as exc:
             flash(str(exc), "error")
             return redirect(back)
+        changed = [
+            label for label, old, new in (
+                ("name", machine.name, name),
+                ("MAC address", machine.mac_address, mac_address),
+                ("IP address", machine.ip_address, ip_address),
+                ("shutdown settings", machine.shutdown, shutdown),
+            )
+            if old != new
+        ]
         # Update the existing object instead of replacing it: scheduled rule jobs, pending wake
         # checks and running cluster steps all hold a reference to it, and must see the change.
         machine.name = name
@@ -286,6 +415,8 @@ def create_app(
         machine.ip_address = ip_address
         machine.shutdown = shutdown
         save_config(config, config_path)
+        if changed:
+            _log(machine.key, "'%s': settings changed (%s)", machine.name, ", ".join(changed))
         flash(f"Machine '{machine.name}' saved", "success")
         return redirect(back)
 
@@ -298,7 +429,8 @@ def create_app(
             wake(machine)
         elif action == "off":
             shut_down(machine)
-        return redirect(url_for("machine_detail", key=key))
+        flash_action_result(machine)
+        return redirect_back(url_for("machine_detail", key=key))
 
     @app.post("/machines/<key>/schedule/add")
     def schedule_add(key: str):
@@ -350,6 +482,7 @@ def create_app(
         cluster = Cluster(key=key, name=name, members=members, delay_seconds=delay, schedule=[])
         config.clusters.append(cluster)
         save_config(config, config_path)
+        _log(owner_event_key(cluster), "Cluster '%s' added (%s)", cluster.name, _cluster_summary_text(cluster, config))
         flash(f"Cluster '{cluster.name}' added", "success")
         return redirect(url_for("cluster_detail", key=cluster.key))
 
@@ -370,6 +503,7 @@ def create_app(
             delay_seconds=cluster.delay_seconds,
             owner_key=cluster.key,
             sched_ep="cluster_schedule",
+            owner_events=event_log.recent_events_for(owner_event_key(cluster)),
         )
 
     @app.post("/clusters/<key>/edit")
@@ -382,10 +516,13 @@ def create_app(
         except ConfigError as exc:
             flash(str(exc), "error")
             return redirect(url_for("cluster_detail", key=key))
+        before = (cluster.name, list(cluster.members), cluster.delay_seconds)
         cluster.name = request.form.get("name", "").strip() or cluster.name
         cluster.members = members
         cluster.delay_seconds = delay
         save_config(config, config_path)
+        if (cluster.name, cluster.members, cluster.delay_seconds) != before:
+            _log(owner_event_key(cluster), "Cluster '%s' changed (%s)", cluster.name, _cluster_summary_text(cluster, config))
         flash("Cluster saved", "success")
         return redirect(url_for("cluster_detail", key=key))
 
@@ -397,6 +534,8 @@ def create_app(
         config.clusters.remove(cluster)
         save_config(config, config_path)
         rebuild_jobs()
+        event_log.forget(owner_event_key(cluster))
+        _log(None, "Cluster '%s' deleted", cluster.name)
         flash(f"Cluster '{cluster.name}' deleted", "success")
         return redirect(url_for("index"))
 
@@ -412,7 +551,7 @@ def create_app(
                 f"{verb} {len(cluster.members)} machine(s), {cluster.delay_seconds}s apart — see the event log",
                 "success",
             )
-        return redirect(url_for("cluster_detail", key=key))
+        return redirect_back(url_for("cluster_detail", key=key))
 
     @app.post("/clusters/<key>/schedule/add")
     def cluster_schedule_add(key: str):
@@ -481,6 +620,8 @@ def create_app(
         config.wol = reloaded.wol
         config.notifications = reloaded.notifications
         rebuild_jobs()
+        _log(None, "Configuration imported from '%s': %d machine(s), %d cluster(s)",
+             upload.filename, len(config.machines), len(config.clusters))
         flash(
             f"Imported {len(config.machines)} machine(s) and {len(config.clusters)} cluster(s). "
             "The previous config.yaml was kept in backups/.",
@@ -488,12 +629,65 @@ def create_app(
         )
         return redirect(url_for("index"))
 
+    # --- Read-only status API for other services (Home Assistant, Uptime Kuma, scripts) ---
+
+    def api_response(payload: dict, status: int = 200) -> Response:
+        response = jsonify(payload)
+        response.status_code = status
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
+    @app.route("/api/machines")
+    def api_machines():
+        status = ping_all(config.machines)
+        return api_response({"machines": [machine_json(m, status[m.key]) for m in config.machines]})
+
+    @app.route("/api/machines/<key>")
+    def api_machine(key: str):
+        machine = get_machine(key)
+        if machine is None:
+            return api_response({"error": f"Machine '{key}' not found"}, 404)
+        return api_response(machine_json(machine, ping_all([machine])[machine.key]))
+
+    @app.route("/api/clusters")
+    def api_clusters():
+        member_keys = {key for cluster in config.clusters for key in cluster.members}
+        status = ping_all([m for m in config.machines if m.key in member_keys])
+        return api_response({"clusters": [cluster_json(c, status) for c in config.clusters]})
+
+    @app.route("/api/clusters/<key>")
+    def api_cluster(key: str):
+        cluster = get_cluster(key)
+        if cluster is None:
+            return api_response({"error": f"Cluster '{key}' not found"}, 404)
+        status = ping_all([m for m in config.machines if m.key in cluster.members])
+        return api_response(cluster_json(cluster, status))
+
     @app.errorhandler(413)
     def upload_too_large(_error):
         flash("Import failed, nothing was changed: the file is larger than 1 MB", "error")
         return redirect(url_for("config_page"))
 
     return app
+
+
+def _shutdown_method(machine: Machine) -> str:
+    if isinstance(machine.shutdown, ProxmoxShutdown):
+        return "proxmox"
+    if isinstance(machine.shutdown, SshShutdown):
+        return "ssh"
+    return "none"
+
+
+def _rule_summary(rule: ScheduleRule) -> str:
+    days = ", ".join(_DAY_LABELS[d] for d in sorted(rule.days, key=_DAY_ORDER.index))
+    return f"{days} {rule.time} {rule.action}"
+
+
+def _cluster_summary_text(cluster: Cluster, config: AppConfig) -> str:
+    names = {m.key: m.name for m in config.machines}
+    order = " → ".join(names.get(key, key) for key in cluster.members) or "no members"
+    return f"{order}, {cluster.delay_seconds}s pause"
 
 
 def _rule_from_form(form) -> ScheduleRule:
