@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% block title %}{{ cluster.name }} — WOL Daemon{% endblock %}
+
+{% block header %}
+<header class="header-row">
+  <div>
+    <h1>{{ cluster.name }}</h1>
+    <p>Cluster · {{ cluster.members|length }} machine(s) · {{ cluster.delay_seconds }}s pause</p>
+  </div>
+  <form method="post" action="{{ url_for('cluster_delete', key=cluster.key) }}" onsubmit="return confirm('Really delete this cluster and its schedule? The machines themselves are kept.')">
+    <button type="submit" class="btn btn-outline-danger btn-sm">Delete cluster</button>
+  </form>
+</header>
+{% endblock %}
+
+{% block content %}
+<div class="card">
+  <div class="status-row">
+    <span class="status-dot {{ 'up' if cluster.online == cluster.members|length and cluster.members else 'down' }}"></span>
+    <span class="status-text">{{ cluster.online }} / {{ cluster.members|length }} online</span>
+  </div>
+  <ol class="cluster-members">
+    {% for m in cluster.members %}
+    <li>
+      <span class="status-dot {{ 'up' if m.host_up else 'down' }}"></span>
+      <a href="{{ url_for('machine_detail', key=m.key) }}">{{ m.name }}</a>
+    </li>
+    {% else %}
+    <li class="muted">No members — add some under "Edit cluster" below.</li>
+    {% endfor %}
+  </ol>
+  <dl class="meta-grid">
+    <div>
+      <dt>Last action</dt>
+      <dd>{{ cluster.last_action or 'none yet' }}</dd>
+    </div>
+    <div>
+      <dt>Next scheduled action</dt>
+      <dd>{{ cluster.next_action or 'no rules' }}</dd>
+    </div>
+  </dl>
+  <div class="actions-row">
+    <form class="inline" method="post" action="{{ url_for('cluster_action', key=cluster.key, action='on') }}">
+      <button type="submit" class="btn btn-primary" {{ 'disabled' if not cluster.members else '' }}>Wake all</button>
+    </form>
+    <form class="inline" method="post" action="{{ url_for('cluster_action', key=cluster.key, action='off') }}" onsubmit="return confirm('Shut down all machines in this cluster?')">
+      <button type="submit" class="btn btn-outline-danger" {{ 'disabled' if not cluster.members else '' }}>Shut down all</button>
+    </form>
+  </div>
+  <p class="form-hint muted">Woken top to bottom, shut down bottom to top, {{ cluster.delay_seconds }}s apart. Cluster rules run in addition to each machine's own rules.</p>
+
+  <details>
+    <summary><span class="btn btn-outline btn-sm">Edit cluster</span></summary>
+    <div class="edit-panel">
+      <form method="post" action="{{ url_for('cluster_edit', key=cluster.key) }}">
+        {% include "_cluster_fields.html" %}
+        <div style="margin-top: 1rem;"><button type="submit" class="btn btn-primary btn-sm">Save cluster</button></div>
+      </form>
+    </div>
+  </details>
+</div>
+
+{% include "_schedule.html" %}
+{% endblock %}

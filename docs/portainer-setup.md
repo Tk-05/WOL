@@ -137,3 +137,22 @@ inside the container. Put it in the same volume as `config.yaml` — e.g. bind
 mount a host directory to `/config` and place the key at
 `/config/ssh/desktop_key`, matching `private_key_path` in the example — rather
 than trying to bake it into an environment variable.
+
+## Clusters
+
+A cluster groups machines so they can be woken and shut down together
+(**Add cluster** in the top navigation). Each member gets a position: members
+are woken in that order and shut down in reverse, with a configurable pause in
+between, e.g. the NAS first on and last off so the Proxmox nodes find their
+storage. A cluster has its own schedule, which runs in addition to each
+member's own rules. Deleting a machine removes it from its clusters; deleting a
+cluster keeps its machines.
+
+## Export and import
+
+**Import / export** in the top navigation downloads the complete configuration
+as YAML, or replaces it with an uploaded file. An import is validated first and
+changes nothing if the file has any error; the previous `config.yaml` is kept
+in `backups/`. The export contains Proxmox token secrets in plain text, so
+store it like a password. SSH private keys are not part of it, only their
+paths, so copy the key files to the new node separately.

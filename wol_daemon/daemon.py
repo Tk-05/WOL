@@ -1,19 +1,30 @@
 from __future__ import annotations
 
+import functools
 import logging
 import signal
 import sys
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import requests
 from apscheduler.schedulers.background import BackgroundScheduler
 
-from .config import AppConfig, Machine, ProxmoxShutdown, ScheduleRule, SshShutdown, load_config, save_config
+from .config import (
+    AppConfig,
+    Cluster,
+    Machine,
+    ProxmoxShutdown,
+    ScheduleRule,
+    SshShutdown,
+    load_config,
+    save_config,
+)
 from .eventlog import EventLog, EventLogHandler
 from .magicpacket import send_magic_packet
 from .notify import send_notification
 from .proxmox import ProxmoxClient
-from .scheduler import build_scheduler
+from .scheduler import build_scheduler, owner_event_key, update_jobs
 from .ssh_shutdown import SshClient, SshShutdownError
 from .status import is_host_up
 from .watchdog import schedule_wake_check
@@ -62,9 +73,48 @@ def _shutdown_client(shutdown: ProxmoxShutdown | SshShutdown):
     return SshClient(shutdown)
 
 
-def on_rule_skipped(machine: Machine, rule: ScheduleRule, config: AppConfig, config_path: Path, event_log: EventLog) -> None:
-    logger.info("Skipping scheduled '%s' for '%s' rule '%s' (skip requested)", rule.action, machine.name, rule.name)
-    event_log.record_action(machine.key, rule.action, "schedule", "skipped", f"skipped by user ({rule.name})")
+def cluster_action(
+    config: AppConfig,
+    cluster: Cluster,
+    action: str,
+    event_log: EventLog,
+    scheduler: BackgroundScheduler,
+    source: str = "schedule",
+) -> None:
+    """Wake the members in order, or shut them down in reverse order, delay_seconds apart.
+    Each step is its own scheduler job, so a web request triggering this returns at once."""
+    by_key = {m.key: m for m in config.machines}
+    members = [by_key[key] for key in cluster.members if key in by_key]
+    if action == "off":
+        members.reverse()
+
+    verb = "waking" if action == "on" else "shutting down"
+    logger.info("Cluster '%s': %s %d machine(s), %ds apart", cluster.name, verb, len(members), cluster.delay_seconds)
+    event_log.record_action(
+        owner_event_key(cluster), action, source, "started", f"{len(members)} machine(s), {cluster.delay_seconds}s apart"
+    )
+
+    step_source = f"cluster:{cluster.key}"
+    start = datetime.now()
+    for i, machine in enumerate(members):
+        if action == "on":
+            step = functools.partial(turn_on, config, machine, event_log, scheduler, step_source)
+        else:
+            step = functools.partial(turn_off, config, machine, event_log, step_source)
+        # No misfire limit: a step must not be dropped just because the scheduler ran it late.
+        scheduler.add_job(
+            step,
+            trigger="date",
+            run_date=start + timedelta(seconds=i * cluster.delay_seconds),
+            misfire_grace_time=None,
+        )
+
+
+def on_rule_skipped(
+    owner: Machine | Cluster, rule: ScheduleRule, config: AppConfig, config_path: Path, event_log: EventLog
+) -> None:
+    logger.info("Skipping scheduled '%s' for '%s' rule '%s' (skip requested)", rule.action, owner.name, rule.name)
+    event_log.record_action(owner_event_key(owner), rule.action, "schedule", "skipped", f"skipped by user ({rule.name})")
     save_config(config, config_path)
 
 
@@ -77,18 +127,30 @@ def main() -> None:
     event_handler.setFormatter(logging.Formatter("%(message)s"))
     logger.addHandler(event_handler)
 
-    scheduler = build_scheduler(
-        config.machines,
-        on_action=lambda m: turn_on(config, m, event_log, scheduler, "schedule"),
-        off_action=lambda m: turn_off(config, m, event_log, "schedule"),
-        on_skip=lambda m, rule: on_rule_skipped(m, rule, config, config_path, event_log),
-    )
+    scheduled_callbacks = {
+        "on_action": lambda m: turn_on(config, m, event_log, scheduler, "schedule"),
+        "off_action": lambda m: turn_off(config, m, event_log, "schedule"),
+        "on_cluster": lambda c, action: cluster_action(config, c, action, event_log, scheduler, "schedule"),
+        "on_skip": lambda owner, rule: on_rule_skipped(owner, rule, config, config_path, event_log),
+    }
+    scheduler = build_scheduler(config, **scheduled_callbacks)
     scheduler.start()
-    logger.info("WOL daemon started, %d machine(s) loaded", len(config.machines))
+    logger.info(
+        "WOL daemon started, %d machine(s) and %d cluster(s) loaded", len(config.machines), len(config.clusters)
+    )
     if not config.machines:
         logger.warning("No machines configured yet (%s is missing or empty) - add one in the web UI", config_path)
 
-    app = create_app(config_path, config, scheduler, event_log, turn_on, turn_off, on_rule_skipped)
+    app = create_app(
+        config_path,
+        config,
+        scheduler,
+        event_log,
+        wake=lambda m: turn_on(config, m, event_log, scheduler, "manual"),
+        shut_down=lambda m: turn_off(config, m, event_log, "manual"),
+        run_cluster=lambda c, action: cluster_action(config, c, action, event_log, scheduler, "manual"),
+        rebuild_jobs=lambda: update_jobs(scheduler, config, **scheduled_callbacks),
+    )
 
     def handle_shutdown(signum, frame):
         logger.info("Shutting down WOL daemon...")

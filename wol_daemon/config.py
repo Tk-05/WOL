@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import re
 import shutil
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
@@ -68,6 +68,15 @@ class Machine:
 
 
 @dataclass
+class Cluster:
+    key: str
+    name: str
+    members: list[str]  # machine keys in wake order; shut down in reverse
+    delay_seconds: int
+    schedule: list[ScheduleRule]
+
+
+@dataclass
 class StatusCheckConfig:
     timeout_seconds: int = 5
 
@@ -102,6 +111,7 @@ class AppConfig:
     status_check: StatusCheckConfig
     wol: WolConfig
     notifications: NotificationConfig
+    clusters: list[Cluster] = field(default_factory=list)
 
 
 def _require(data: dict, key: str, section: str):
@@ -212,6 +222,38 @@ def _parse_machines(entries: list) -> list[Machine]:
     return machines
 
 
+def _parse_clusters(entries: list, machine_keys: set[str]) -> list[Cluster]:
+    clusters = []
+    seen_keys: set[str] = set()
+    for i, entry in enumerate(entries):
+        section = f"clusters[{i}]"
+        key = _require(entry, "key", section)
+        if not isinstance(key, str) or not KEY_RE.match(key):
+            raise ConfigError(f"Invalid key '{key}' in {section}: use lowercase letters, digits and hyphens only")
+        if key in seen_keys:
+            raise ConfigError(f"Duplicate cluster key '{key}'")
+        seen_keys.add(key)
+        members = list(entry.get("members") or [])
+        unknown = [m for m in members if m not in machine_keys]
+        if unknown:
+            raise ConfigError(f"Unknown machine(s) {unknown} in {section}.members")
+        if len(set(members)) != len(members):
+            raise ConfigError(f"A machine is listed more than once in {section}.members")
+        delay = entry.get("delay_seconds", 60)
+        if not isinstance(delay, int) or delay < 0:
+            raise ConfigError(f"delay_seconds in {section} must be a whole number of seconds, 0 or more")
+        clusters.append(
+            Cluster(
+                key=key,
+                name=entry.get("name", key),
+                members=members,
+                delay_seconds=delay,
+                schedule=_parse_schedule(entry.get("schedule", [])),
+            )
+        )
+    return clusters
+
+
 def _migrate_legacy(raw: dict) -> dict:
     """Convert a pre-multi-machine config.yaml (top-level proxmox/target/schedule) into the
     current machines-list shape. Runs transparently on load; the file is rewritten to the new
@@ -239,6 +281,10 @@ def _bool_env(name: str, default: bool) -> bool:
     if value is None:
         return default
     return value.strip().lower() in ("1", "true", "yes", "on")
+
+
+def env_config_active() -> bool:
+    return any(os.environ.get(name) for name in _REQUIRED_ENV_VARS)
 
 
 def _config_from_env() -> dict | None:
@@ -297,6 +343,40 @@ def _config_from_env() -> dict | None:
     }
 
 
+def _config_from_raw(raw: dict, env_config: dict | None) -> AppConfig:
+    if "machines" not in raw and "target" in raw:
+        raw = _migrate_legacy(raw)
+    machines = _parse_machines(raw.get("machines") or [])
+
+    if env_config is None:
+        status_check = _parse_status_check(raw.get("status_check"))
+        wol = _parse_wol(raw.get("wol"))
+        notifications = _parse_notifications(raw.get("notifications"))
+    else:
+        # Env vars always win for their machine's deployment settings (so a redeploy with a
+        # changed token/IP takes effect). Its schedule and every other machine added via the
+        # web UI are kept from the existing file.
+        env_machine = env_config["machines"][0]
+        for i, machine in enumerate(machines):
+            if machine.key == env_machine.key:
+                env_machine.schedule = machine.schedule
+                machines[i] = env_machine
+                break
+        else:
+            machines.insert(0, env_machine)
+        status_check = env_config["status_check"]
+        wol = env_config["wol"]
+        notifications = env_config["notifications"]
+
+    return AppConfig(
+        machines=machines,
+        status_check=status_check,
+        wol=wol,
+        notifications=notifications,
+        clusters=_parse_clusters(raw.get("clusters") or [], {m.key for m in machines}),
+    )
+
+
 def load_config(path: str | Path) -> AppConfig:
     path = Path(path)
     env_config = _config_from_env()
@@ -307,38 +387,28 @@ def load_config(path: str | Path) -> AppConfig:
     if path.exists():
         with path.open(encoding="utf-8") as f:
             raw = yaml.safe_load(f) or {}
-        if "machines" not in raw and "target" in raw:
-            raw = _migrate_legacy(raw)
-    machines = _parse_machines(raw.get("machines") or [])
 
-    if env_config is None:
-        return AppConfig(
-            machines=machines,
-            status_check=_parse_status_check(raw.get("status_check")),
-            wol=_parse_wol(raw.get("wol")),
-            notifications=_parse_notifications(raw.get("notifications")),
-        )
-
-    # Env vars always win for their machine's deployment settings (so a redeploy with a
-    # changed token/IP takes effect). Its schedule and every other machine added via the
-    # web UI are kept from the existing file.
-    env_machine = env_config["machines"][0]
-    for i, machine in enumerate(machines):
-        if machine.key == env_machine.key:
-            env_machine.schedule = machine.schedule
-            machines[i] = env_machine
-            break
-    else:
-        machines.insert(0, env_machine)
-
-    config = AppConfig(
-        machines=machines,
-        status_check=env_config["status_check"],
-        wol=env_config["wol"],
-        notifications=env_config["notifications"],
-    )
-    save_config(config, path)
+    config = _config_from_raw(raw, env_config)
+    if env_config is not None:
+        save_config(config, path)
     return config
+
+
+def parse_config_text(text: str) -> AppConfig:
+    """Validate an uploaded config (e.g. from the web UI's import) without touching disk.
+    Environment variables are deliberately not applied here; that happens on the next load."""
+    try:
+        raw = yaml.safe_load(text)
+    except yaml.YAMLError as exc:
+        raise ConfigError(f"Not valid YAML: {exc}") from exc
+    if raw is None:
+        raw = {}
+    if not isinstance(raw, dict):
+        raise ConfigError("Expected a YAML mapping (key: value pairs) at the top level")
+    try:
+        return _config_from_raw(raw, None)
+    except (KeyError, TypeError, AttributeError, ValueError) as exc:
+        raise ConfigError(f"Unexpected config structure: {exc!r}") from exc
 
 
 def _shutdown_to_dict(shutdown: ProxmoxShutdown | SshShutdown | None) -> dict | None:
@@ -363,11 +433,20 @@ def _shutdown_to_dict(shutdown: ProxmoxShutdown | SshShutdown | None) -> dict | 
     }
 
 
-def save_config(config: AppConfig, path: str | Path) -> None:
-    path = Path(path)
-    if path.exists():
-        _backup_config(path)
+def _schedule_to_list(schedule: list[ScheduleRule]) -> list[dict]:
+    return [
+        {
+            "name": rule.name,
+            "days": rule.days,
+            "time": rule.time,
+            "action": rule.action,
+            "skip_date": rule.skip_date,
+        }
+        for rule in schedule
+    ]
 
+
+def config_to_dict(config: AppConfig) -> dict:
     notifications = {}
     if config.notifications.ntfy:
         notifications["ntfy"] = {"url": config.notifications.ntfy.url}
@@ -377,7 +456,7 @@ def save_config(config: AppConfig, path: str | Path) -> None:
             "chat_id": config.notifications.telegram.chat_id,
         }
 
-    data = {
+    return {
         "machines": [
             {
                 "key": machine.key,
@@ -385,18 +464,19 @@ def save_config(config: AppConfig, path: str | Path) -> None:
                 "mac_address": machine.mac_address,
                 "ip_address": machine.ip_address,
                 "shutdown": _shutdown_to_dict(machine.shutdown),
-                "schedule": [
-                    {
-                        "name": rule.name,
-                        "days": rule.days,
-                        "time": rule.time,
-                        "action": rule.action,
-                        "skip_date": rule.skip_date,
-                    }
-                    for rule in machine.schedule
-                ],
+                "schedule": _schedule_to_list(machine.schedule),
             }
             for machine in config.machines
+        ],
+        "clusters": [
+            {
+                "key": cluster.key,
+                "name": cluster.name,
+                "members": cluster.members,
+                "delay_seconds": cluster.delay_seconds,
+                "schedule": _schedule_to_list(cluster.schedule),
+            }
+            for cluster in config.clusters
         ],
         "status_check": {
             "timeout_seconds": config.status_check.timeout_seconds,
@@ -408,8 +488,17 @@ def save_config(config: AppConfig, path: str | Path) -> None:
         },
         "notifications": notifications,
     }
-    with path.open("w", encoding="utf-8") as f:
-        yaml.safe_dump(data, f, allow_unicode=True, sort_keys=False)
+
+
+def config_to_yaml(config: AppConfig) -> str:
+    return yaml.safe_dump(config_to_dict(config), allow_unicode=True, sort_keys=False)
+
+
+def save_config(config: AppConfig, path: str | Path) -> None:
+    path = Path(path)
+    if path.exists():
+        _backup_config(path)
+    path.write_text(config_to_yaml(config), encoding="utf-8")
 
 
 def _backup_config(path: Path, keep: int = 5) -> None:

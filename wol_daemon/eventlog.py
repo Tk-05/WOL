@@ -10,10 +10,10 @@ from threading import Lock
 @dataclass
 class ActionRecord:
     timestamp: datetime
-    machine_key: str
+    machine_key: str  # or "cluster@<key>" for a cluster
     action: str  # "on" | "off"
-    source: str  # "schedule" | "manual" | "watchdog"
-    result: str  # "ok" | "skipped" | "error"
+    source: str  # "schedule" | "manual" | "watchdog" | "cluster:<key>"
+    result: str  # "ok" | "skipped" | "error" | "started" (clusters)
     detail: str = ""
 
 

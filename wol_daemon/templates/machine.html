@@ -1,148 +1,52 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{{ machine.name }} — WOL Daemon</title>
-<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
-</head>
-<body>
-  {% if show_back_link %}
-  <a class="back-link" href="{{ url_for('index') }}">&larr; All machines</a>
-  {% endif %}
-  <header class="header-row">
+{% extends "base.html" %}
+{% block title %}{{ machine.name }} — WOL Daemon{% endblock %}
+
+{% block header %}
+<header class="header-row">
+  <div>
+    <h1>{{ machine.name }}</h1>
+    <p>
+      {{ machine.ip_address }} ({{ machine.mac_address }})
+      {% if machine.clusters %}
+      · Cluster:
+      {% for c in machine.clusters %}<a href="{{ url_for('cluster_detail', key=c.key) }}">{{ c.name }}</a>{{ ", " if not loop.last }}{% endfor %}
+      {% endif %}
+    </p>
+  </div>
+  <form method="post" action="{{ url_for('machine_delete', key=machine.key) }}" onsubmit="return confirm('Really delete this machine and its whole schedule? It is also removed from any clusters.')">
+    <button type="submit" class="btn btn-outline-danger btn-sm">Delete machine</button>
+  </form>
+</header>
+{% endblock %}
+
+{% block content %}
+<div class="card">
+  <div class="status-row">
+    <span class="status-dot {{ 'up' if machine.host_up else 'down' }}"></span>
+    <span class="status-text">{{ 'Online' if machine.host_up else 'Offline' }}</span>
+  </div>
+  <dl class="meta-grid">
     <div>
-      <h1>{{ machine.name }}</h1>
-      <p>{{ machine.ip_address }} ({{ machine.mac_address }})</p>
+      <dt>Last action</dt>
+      <dd>{{ machine.last_action or 'none yet' }}</dd>
     </div>
-    <div class="actions-row">
-      <a class="btn btn-outline btn-sm" href="{{ url_for('machine_add') }}">+ Add machine</a>
-      <form method="post" action="{{ url_for('machine_delete', key=machine.key) }}" onsubmit="return confirm('Really delete this machine and its whole schedule?')">
-        <button type="submit" class="btn btn-outline-danger btn-sm">Delete machine</button>
-      </form>
+    <div>
+      <dt>Next scheduled action</dt>
+      <dd>{{ machine.next_action or 'no rules' }}</dd>
     </div>
-  </header>
-
-  {% with messages = get_flashed_messages(with_categories=true) %}
-    {% for category, message in messages %}
-      <div class="flash {{ category }}">{{ message }}</div>
-    {% endfor %}
-  {% endwith %}
-
-  <div class="card">
-    <div class="status-row">
-      <span class="status-dot {{ 'up' if machine.host_up else 'down' }}"></span>
-      <span class="status-text">{{ 'Online' if machine.host_up else 'Offline' }}</span>
-    </div>
-    <dl class="meta-grid">
-      <div>
-        <dt>Last action</dt>
-        <dd>{{ machine.last_action or 'none yet' }}</dd>
-      </div>
-      <div>
-        <dt>Next scheduled action</dt>
-        <dd>{{ machine.next_action or 'no rules' }}</dd>
-      </div>
-    </dl>
-    <div class="actions-row">
-      <form class="inline" method="post" action="{{ url_for('action_on', key=machine.key) }}">
-        <button type="submit" class="btn btn-primary">Wake now</button>
-      </form>
-      <form class="inline" method="post" action="{{ url_for('action_off', key=machine.key) }}">
-        <button type="submit" class="btn btn-outline-danger" {{ 'disabled' if not machine.has_shutdown else '' }}>Shut down now</button>
-      </form>
-    </div>
-    {% if not machine.has_shutdown %}
-    <p class="muted" style="font-size: 0.8rem; margin: 0.75rem 0 0;">No shutdown method configured for this machine — wake-only.</p>
-    {% endif %}
-  </div>
-
-  <h2>Schedule</h2>
-  <div class="table-wrap">
-    <table>
-      <thead><tr><th>Name</th><th>Days</th><th>Time</th><th>Action</th><th></th></tr></thead>
-      <tbody>
-        {% for rule in schedule %}
-        <tr>
-          <td>{{ rule.name }}</td>
-          <td class="muted">{{ rule.days_str }}</td>
-          <td>
-            {{ rule.time }}
-            {% if rule.skip_pending %}<div class="muted" style="font-size: 0.75rem;">next run skipped</div>{% endif %}
-          </td>
-          <td><span class="badge {{ rule.action }}">{{ 'On' if rule.action == 'on' else 'Off' }}</span></td>
-          <td>
-            <div class="actions-row">
-              <form class="inline" method="post" action="{{ url_for('schedule_skip', key=machine.key, index=rule.index) }}">
-                <button type="submit" class="btn btn-outline btn-sm">{{ 'Undo skip' if rule.skip_pending else 'Skip next' }}</button>
-              </form>
-              <details>
-                <summary><span class="btn btn-outline btn-sm">Edit</span></summary>
-                <div class="edit-panel">
-                  <form method="post" action="{{ url_for('schedule_edit', key=machine.key, index=rule.index) }}">
-                    <div>
-                      <label class="field-label">Name</label>
-                      <input type="text" name="name" value="{{ rule.name }}" placeholder="Name">
-                    </div>
-                    <div class="field-row">
-                      <div class="day-picker">
-                        {% for code, label in day_options %}
-                        <label class="day-chip"><input type="checkbox" name="days" value="{{ code }}" {{ 'checked' if code in rule.days else '' }}><span>{{ label }}</span></label>
-                        {% endfor %}
-                      </div>
-                    </div>
-                    <div class="field-row">
-                      <input type="time" name="time" value="{{ rule.time }}" required>
-                      <select name="action">
-                        <option value="on" {{ 'selected' if rule.action == 'on' else '' }}>On</option>
-                        <option value="off" {{ 'selected' if rule.action == 'off' else '' }}>Off</option>
-                      </select>
-                      <button type="submit" class="btn btn-primary btn-sm">Save</button>
-                    </div>
-                  </form>
-                </div>
-              </details>
-              <form class="inline" method="post" action="{{ url_for('schedule_delete', key=machine.key, index=rule.index) }}" onsubmit="return confirm('Really delete this rule?')">
-                <button type="submit" class="btn btn-outline-danger btn-sm">Delete</button>
-              </form>
-            </div>
-          </td>
-        </tr>
-        {% else %}
-        <tr><td colspan="5"><small class="muted">No rules created yet</small></td></tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
-
-  <h2>New rule</h2>
-  <div class="card">
-    <form class="add-form" method="post" action="{{ url_for('schedule_add', key=machine.key) }}">
-      <div>
-        <label class="field-label">Name</label>
-        <input type="text" name="name" placeholder="e.g. Weekdays on">
-      </div>
-      <div>
-        <label class="field-label">Days</label>
-        <div class="day-picker">
-          {% for code, label in day_options %}
-          <label class="day-chip"><input type="checkbox" name="days" value="{{ code }}"><span>{{ label }}</span></label>
-          {% endfor %}
-        </div>
-      </div>
-      <div>
-        <label class="field-label">Time</label>
-        <input type="time" name="time" required>
-      </div>
-      <div>
-        <label class="field-label">Action</label>
-        <select name="action">
-          <option value="on">On</option>
-          <option value="off">Off</option>
-        </select>
-      </div>
-      <div><button type="submit" class="btn btn-primary">Add</button></div>
+  </dl>
+  <div class="actions-row">
+    <form class="inline" method="post" action="{{ url_for('machine_action', key=machine.key, action='on') }}">
+      <button type="submit" class="btn btn-primary">Wake now</button>
+    </form>
+    <form class="inline" method="post" action="{{ url_for('machine_action', key=machine.key, action='off') }}">
+      <button type="submit" class="btn btn-outline-danger" {{ 'disabled' if not machine.has_shutdown else '' }}>Shut down now</button>
     </form>
   </div>
-</body>
-</html>
+  {% if not machine.has_shutdown %}
+  <p class="form-hint muted">No shutdown method configured for this machine — wake-only.</p>
+  {% endif %}
+</div>
+
+{% include "_schedule.html" %}
+{% endblock %}

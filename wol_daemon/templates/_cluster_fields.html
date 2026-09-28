@@ -1,0 +1,25 @@
+{# Shared cluster fields. Expects: machines (key/name), positions (key -> position),
+   cluster_name, delay_seconds. #}
+<div class="form-grid">
+  <div>
+    <label class="field-label">Name</label>
+    <input type="text" name="name" value="{{ cluster_name }}" placeholder="Homelab">
+  </div>
+  <div>
+    <label class="field-label">Pause between machines (seconds)</label>
+    <input type="number" name="delay_seconds" min="0" value="{{ delay_seconds }}" placeholder="60">
+  </div>
+</div>
+
+<label class="field-label">Members</label>
+<p class="form-hint muted">Give each machine in the cluster a position. They're woken in this order and shut down in reverse, with the pause above between them. Leave a field empty to keep that machine out.</p>
+<div class="member-list">
+  {% for m in machines %}
+  <label class="member-row">
+    <input type="number" name="pos_{{ m.key }}" min="1" value="{{ positions.get(m.key, '') }}" placeholder="–">
+    <span>{{ m.name }} <span class="muted">({{ m.key }})</span></span>
+  </label>
+  {% else %}
+  <p class="muted">No machines yet. <a href="{{ url_for('machine_add') }}">Add machines</a> first.</p>
+  {% endfor %}
+</div>

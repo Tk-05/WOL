@@ -2,14 +2,17 @@ from __future__ import annotations
 
 import re
 import secrets
+from concurrent.futures import ThreadPoolExecutor
+from datetime import date
 from pathlib import Path
 from typing import Callable
 
 from apscheduler.schedulers.background import BackgroundScheduler
-from flask import Flask, flash, redirect, render_template, request, url_for
+from flask import Flask, Response, flash, redirect, render_template, request, url_for
 
 from .config import (
     AppConfig,
+    Cluster,
     ConfigError,
     KEY_RE,
     Machine,
@@ -18,15 +21,20 @@ from .config import (
     SshShutdown,
     VALID_ACTIONS,
     VALID_DAYS,
+    config_to_yaml,
+    env_config_active,
+    load_config,
+    parse_config_text,
     save_config,
 )
 from .eventlog import EventLog
-from .scheduler import update_jobs
+from .scheduler import cluster_job_prefix, machine_job_prefix, owner_event_key
 from .status import is_host_up
 
 _TIME_RE = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
 _DAY_ORDER = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
 _DAY_LABELS = {"mon": "Mon", "tue": "Tue", "wed": "Wed", "thu": "Thu", "fri": "Fri", "sat": "Sat", "sun": "Sun"}
+_DAY_OPTIONS = [(code, _DAY_LABELS[code]) for code in _DAY_ORDER]
 
 
 def create_app(
@@ -34,27 +42,30 @@ def create_app(
     config: AppConfig,
     scheduler: BackgroundScheduler,
     event_log: EventLog,
-    turn_on: Callable[[AppConfig, Machine, EventLog, BackgroundScheduler, str], None],
-    turn_off: Callable[[AppConfig, Machine, EventLog, str], None],
-    on_rule_skipped: Callable[[Machine, ScheduleRule, AppConfig, Path, EventLog], None],
+    wake: Callable[[Machine], None],
+    shut_down: Callable[[Machine], None],
+    run_cluster: Callable[[Cluster, str], None],
+    rebuild_jobs: Callable[[], None],
 ) -> Flask:
     app = Flask(__name__)
     app.secret_key = secrets.token_hex(16)
+    app.config["MAX_CONTENT_LENGTH"] = 1024 * 1024  # config imports are tiny; refuse anything big
 
     def get_machine(key: str) -> Machine | None:
         return next((m for m in config.machines if m.key == key), None)
 
-    def rebuild_jobs() -> None:
-        update_jobs(
-            scheduler,
-            config.machines,
-            on_action=lambda m: turn_on(config, m, event_log, scheduler, "schedule"),
-            off_action=lambda m: turn_off(config, m, event_log, "schedule"),
-            on_skip=lambda m, rule: on_rule_skipped(m, rule, config, config_path, event_log),
-        )
+    def get_cluster(key: str) -> Cluster | None:
+        return next((c for c in config.clusters if c.key == key), None)
 
-    def next_action_info(machine: Machine):
-        prefix = f"{machine.key}:rule-"
+    def ping_all(machines: list[Machine]) -> dict[str, bool]:
+        if not machines:
+            return {}
+        timeout = config.status_check.timeout_seconds
+        with ThreadPoolExecutor(max_workers=min(16, len(machines))) as pool:
+            results = list(pool.map(lambda m: is_host_up(m.ip_address, timeout), machines))
+        return {m.key: up for m, up in zip(machines, results)}
+
+    def next_action_info(prefix: str, schedule: list[ScheduleRule]) -> str | None:
         jobs = [
             j for j in scheduler.get_jobs()
             if j.id.startswith(prefix) and getattr(j, "next_run_time", None) is not None
@@ -64,12 +75,12 @@ def create_app(
         job = min(jobs, key=lambda j: j.next_run_time)
         text = f"{job.name} — {job.next_run_time.strftime('%a %d %b %H:%M')}"
         index = int(job.id[len(prefix):])
-        if 0 <= index < len(machine.schedule) and machine.schedule[index].skip_date == job.next_run_time.date().isoformat():
+        if 0 <= index < len(schedule) and schedule[index].skip_date == job.next_run_time.date().isoformat():
             text += " (will be skipped)"
         return text
 
-    def last_action_str(machine: Machine):
-        record = event_log.last_action_for(machine.key)
+    def last_action_str(event_key: str) -> str | None:
+        record = event_log.last_action_for(event_key)
         if record is None:
             return None
         text = f"{record.timestamp:%d %b %H:%M:%S} — {record.action} ({record.source}) — {record.result}"
@@ -77,19 +88,32 @@ def create_app(
             text += f": {record.detail}"
         return text
 
-    def machine_summary(machine: Machine) -> dict:
+    def machine_summary(machine: Machine, host_up: bool) -> dict:
         return {
             "key": machine.key,
             "name": machine.name,
             "mac_address": machine.mac_address,
             "ip_address": machine.ip_address,
             "has_shutdown": machine.shutdown is not None,
-            "host_up": is_host_up(machine.ip_address, config.status_check.timeout_seconds),
-            "last_action": last_action_str(machine),
-            "next_action": next_action_info(machine),
+            "host_up": host_up,
+            "last_action": last_action_str(machine.key),
+            "next_action": next_action_info(machine_job_prefix(machine), machine.schedule),
+            "clusters": [{"key": c.key, "name": c.name} for c in config.clusters if machine.key in c.members],
         }
 
-    def schedule_view(machine: Machine) -> list[dict]:
+    def cluster_summary(cluster: Cluster, status: dict[str, bool]) -> dict:
+        members = [m for m in (get_machine(key) for key in cluster.members) if m is not None]
+        return {
+            "key": cluster.key,
+            "name": cluster.name,
+            "delay_seconds": cluster.delay_seconds,
+            "members": [{"key": m.key, "name": m.name, "host_up": status.get(m.key, False)} for m in members],
+            "online": sum(1 for m in members if status.get(m.key)),
+            "last_action": last_action_str(owner_event_key(cluster)),
+            "next_action": next_action_info(cluster_job_prefix(cluster), cluster.schedule),
+        }
+
+    def schedule_view(schedule: list[ScheduleRule]) -> list[dict]:
         return [
             {
                 "index": idx,
@@ -100,18 +124,94 @@ def create_app(
                 "action": rule.action,
                 "skip_pending": rule.skip_date is not None,
             }
-            for idx, rule in enumerate(machine.schedule)
+            for idx, rule in enumerate(schedule)
         ]
+
+    def machine_choices() -> list[dict]:
+        return [{"key": m.key, "name": m.name} for m in config.machines]
+
+    # --- Schedule editing, shared by machines and clusters ---
+
+    def add_rule(owner: Machine | Cluster, back: str):
+        try:
+            rule = _rule_from_form(request.form)
+        except ConfigError as exc:
+            flash(str(exc), "error")
+            return redirect(back)
+        owner.schedule.append(rule)
+        save_config(config, config_path)
+        rebuild_jobs()
+        flash("Rule added", "success")
+        return redirect(back)
+
+    def edit_rule(owner: Machine | Cluster, index: int, back: str):
+        if not 0 <= index < len(owner.schedule):
+            flash("Rule not found", "error")
+            return redirect(back)
+        try:
+            rule = _rule_from_form(request.form)
+        except ConfigError as exc:
+            flash(str(exc), "error")
+            return redirect(back)
+        owner.schedule[index] = rule
+        save_config(config, config_path)
+        rebuild_jobs()
+        flash("Rule saved", "success")
+        return redirect(back)
+
+    def delete_rule(owner: Machine | Cluster, index: int, back: str):
+        if 0 <= index < len(owner.schedule):
+            del owner.schedule[index]
+            save_config(config, config_path)
+            rebuild_jobs()
+            flash("Rule deleted", "success")
+        return redirect(back)
+
+    def skip_rule(owner: Machine | Cluster, index: int, job_id: str, back: str):
+        if not 0 <= index < len(owner.schedule):
+            flash("Rule not found", "error")
+            return redirect(back)
+        rule = owner.schedule[index]
+        if rule.skip_date is not None:
+            rule.skip_date = None
+            flash("Skip cancelled", "success")
+        else:
+            job = scheduler.get_job(job_id)
+            if job is None or job.next_run_time is None:
+                flash("No upcoming run to skip", "error")
+                return redirect(back)
+            rule.skip_date = job.next_run_time.date().isoformat()
+            flash(f"Next run of '{rule.name}' will be skipped", "success")
+        save_config(config, config_path)
+        return redirect(back)
+
+    def machine_or_redirect(key: str) -> Machine | None:
+        machine = get_machine(key)
+        if machine is None:
+            flash("Machine not found", "error")
+        return machine
+
+    def cluster_or_redirect(key: str) -> Cluster | None:
+        cluster = get_cluster(key)
+        if cluster is None:
+            flash("Cluster not found", "error")
+        return cluster
+
+    # --- Overview ---
 
     @app.route("/")
     def index():
-        if len(config.machines) == 1:
+        if len(config.machines) == 1 and not config.clusters:
             return redirect(url_for("machine_detail", key=config.machines[0].key))
+        status = ping_all(config.machines)
         return render_template(
             "overview.html",
-            machines=[machine_summary(m) for m in config.machines],
+            machines=[machine_summary(m, status[m.key]) for m in config.machines],
+            clusters=[cluster_summary(c, status) for c in config.clusters],
             events=event_log.recent_events(),
         )
+
+    # --- Machines ---
 
     @app.route("/machines/add", methods=["GET", "POST"])
     def machine_add():
@@ -130,11 +230,13 @@ def create_app(
 
     @app.post("/machines/<key>/delete")
     def machine_delete(key: str):
-        machine = get_machine(key)
+        machine = machine_or_redirect(key)
         if machine is None:
-            flash("Machine not found", "error")
             return redirect(url_for("index"))
         config.machines.remove(machine)
+        for cluster in config.clusters:
+            if key in cluster.members:
+                cluster.members.remove(key)
         save_config(config, config_path)
         rebuild_jobs()
         flash(f"Machine '{machine.name}' deleted", "success")
@@ -142,108 +244,222 @@ def create_app(
 
     @app.route("/machines/<key>")
     def machine_detail(key: str):
-        machine = get_machine(key)
+        machine = machine_or_redirect(key)
         if machine is None:
-            flash("Machine not found", "error")
             return redirect(url_for("index"))
+        status = ping_all([machine])
         return render_template(
             "machine.html",
-            machine=machine_summary(machine),
-            schedule=schedule_view(machine),
-            day_options=[(code, _DAY_LABELS[code]) for code in _DAY_ORDER],
-            show_back_link=len(config.machines) > 1,
+            machine=machine_summary(machine, status[machine.key]),
+            schedule=schedule_view(machine.schedule),
+            day_options=_DAY_OPTIONS,
+            owner_key=machine.key,
+            sched_ep="schedule",
         )
 
-    @app.post("/machines/<key>/action/on")
-    def action_on(key: str):
-        machine = get_machine(key)
+    @app.post("/machines/<key>/action/<action>")
+    def machine_action(key: str, action: str):
+        machine = machine_or_redirect(key)
         if machine is None:
-            flash("Machine not found", "error")
             return redirect(url_for("index"))
-        turn_on(config, machine, event_log, scheduler, "manual")
-        return redirect(url_for("machine_detail", key=key))
-
-    @app.post("/machines/<key>/action/off")
-    def action_off(key: str):
-        machine = get_machine(key)
-        if machine is None:
-            flash("Machine not found", "error")
-            return redirect(url_for("index"))
-        turn_off(config, machine, event_log, "manual")
+        if action == "on":
+            wake(machine)
+        elif action == "off":
+            shut_down(machine)
         return redirect(url_for("machine_detail", key=key))
 
     @app.post("/machines/<key>/schedule/add")
     def schedule_add(key: str):
-        machine = get_machine(key)
+        machine = machine_or_redirect(key)
         if machine is None:
-            flash("Machine not found", "error")
             return redirect(url_for("index"))
-        try:
-            rule = _rule_from_form(request.form)
-        except ConfigError as exc:
-            flash(str(exc), "error")
-            return redirect(url_for("machine_detail", key=key))
-        machine.schedule.append(rule)
-        save_config(config, config_path)
-        rebuild_jobs()
-        flash("Rule added", "success")
-        return redirect(url_for("machine_detail", key=key))
+        return add_rule(machine, url_for("machine_detail", key=key))
 
     @app.post("/machines/<key>/schedule/<int:index>/edit")
     def schedule_edit(key: str, index: int):
-        machine = get_machine(key)
+        machine = machine_or_redirect(key)
         if machine is None:
-            flash("Machine not found", "error")
             return redirect(url_for("index"))
-        if not 0 <= index < len(machine.schedule):
-            flash("Rule not found", "error")
-            return redirect(url_for("machine_detail", key=key))
-        try:
-            rule = _rule_from_form(request.form)
-        except ConfigError as exc:
-            flash(str(exc), "error")
-            return redirect(url_for("machine_detail", key=key))
-        machine.schedule[index] = rule
-        save_config(config, config_path)
-        rebuild_jobs()
-        flash("Rule saved", "success")
-        return redirect(url_for("machine_detail", key=key))
+        return edit_rule(machine, index, url_for("machine_detail", key=key))
 
     @app.post("/machines/<key>/schedule/<int:index>/delete")
     def schedule_delete(key: str, index: int):
-        machine = get_machine(key)
+        machine = machine_or_redirect(key)
         if machine is None:
-            flash("Machine not found", "error")
             return redirect(url_for("index"))
-        if 0 <= index < len(machine.schedule):
-            del machine.schedule[index]
-            save_config(config, config_path)
-            rebuild_jobs()
-            flash("Rule deleted", "success")
-        return redirect(url_for("machine_detail", key=key))
+        return delete_rule(machine, index, url_for("machine_detail", key=key))
 
     @app.post("/machines/<key>/schedule/<int:index>/skip")
     def schedule_skip(key: str, index: int):
-        machine = get_machine(key)
+        machine = machine_or_redirect(key)
         if machine is None:
-            flash("Machine not found", "error")
             return redirect(url_for("index"))
-        if not 0 <= index < len(machine.schedule):
-            flash("Rule not found", "error")
-            return redirect(url_for("machine_detail", key=key))
-        rule = machine.schedule[index]
-        if rule.skip_date is not None:
-            rule.skip_date = None
-            flash("Skip cancelled", "success")
-        else:
-            job = scheduler.get_job(f"{machine.key}:rule-{index}")
-            if job is None or job.next_run_time is None:
-                flash("No upcoming run to skip", "error")
-                return redirect(url_for("machine_detail", key=key))
-            rule.skip_date = job.next_run_time.date().isoformat()
-            flash(f"Next run of '{rule.name}' will be skipped", "success")
+        return skip_rule(machine, index, machine_job_prefix(machine) + str(index), url_for("machine_detail", key=key))
+
+    # --- Clusters ---
+
+    @app.route("/clusters/add", methods=["GET", "POST"])
+    def cluster_add():
+        if request.method == "GET":
+            return render_template(
+                "add_cluster.html", machines=machine_choices(), cluster_name="", delay_seconds=60, positions={}
+            )
+        try:
+            key = request.form.get("key", "").strip().lower()
+            if not key or not KEY_RE.match(key):
+                raise ConfigError("Key must use lowercase letters, digits and hyphens only, e.g. 'homelab'")
+            if get_cluster(key) is not None:
+                raise ConfigError(f"A cluster with key '{key}' already exists")
+            members, delay = _cluster_members_from_form(request.form, config.machines)
+        except ConfigError as exc:
+            flash(str(exc), "error")
+            return redirect(url_for("cluster_add"))
+        name = request.form.get("name", "").strip() or key
+        cluster = Cluster(key=key, name=name, members=members, delay_seconds=delay, schedule=[])
+        config.clusters.append(cluster)
         save_config(config, config_path)
-        return redirect(url_for("machine_detail", key=key))
+        flash(f"Cluster '{cluster.name}' added", "success")
+        return redirect(url_for("cluster_detail", key=cluster.key))
+
+    @app.route("/clusters/<key>")
+    def cluster_detail(key: str):
+        cluster = cluster_or_redirect(key)
+        if cluster is None:
+            return redirect(url_for("index"))
+        status = ping_all([m for m in config.machines if m.key in cluster.members])
+        return render_template(
+            "cluster.html",
+            cluster=cluster_summary(cluster, status),
+            schedule=schedule_view(cluster.schedule),
+            day_options=_DAY_OPTIONS,
+            machines=machine_choices(),
+            positions={member: i + 1 for i, member in enumerate(cluster.members)},
+            cluster_name=cluster.name,
+            delay_seconds=cluster.delay_seconds,
+            owner_key=cluster.key,
+            sched_ep="cluster_schedule",
+        )
+
+    @app.post("/clusters/<key>/edit")
+    def cluster_edit(key: str):
+        cluster = cluster_or_redirect(key)
+        if cluster is None:
+            return redirect(url_for("index"))
+        try:
+            members, delay = _cluster_members_from_form(request.form, config.machines)
+        except ConfigError as exc:
+            flash(str(exc), "error")
+            return redirect(url_for("cluster_detail", key=key))
+        cluster.name = request.form.get("name", "").strip() or cluster.name
+        cluster.members = members
+        cluster.delay_seconds = delay
+        save_config(config, config_path)
+        flash("Cluster saved", "success")
+        return redirect(url_for("cluster_detail", key=key))
+
+    @app.post("/clusters/<key>/delete")
+    def cluster_delete(key: str):
+        cluster = cluster_or_redirect(key)
+        if cluster is None:
+            return redirect(url_for("index"))
+        config.clusters.remove(cluster)
+        save_config(config, config_path)
+        rebuild_jobs()
+        flash(f"Cluster '{cluster.name}' deleted", "success")
+        return redirect(url_for("index"))
+
+    @app.post("/clusters/<key>/action/<action>")
+    def cluster_action(key: str, action: str):
+        cluster = cluster_or_redirect(key)
+        if cluster is None:
+            return redirect(url_for("index"))
+        if action in VALID_ACTIONS:
+            run_cluster(cluster, action)
+            verb = "Waking" if action == "on" else "Shutting down"
+            flash(
+                f"{verb} {len(cluster.members)} machine(s), {cluster.delay_seconds}s apart — see the event log",
+                "success",
+            )
+        return redirect(url_for("cluster_detail", key=key))
+
+    @app.post("/clusters/<key>/schedule/add")
+    def cluster_schedule_add(key: str):
+        cluster = cluster_or_redirect(key)
+        if cluster is None:
+            return redirect(url_for("index"))
+        return add_rule(cluster, url_for("cluster_detail", key=key))
+
+    @app.post("/clusters/<key>/schedule/<int:index>/edit")
+    def cluster_schedule_edit(key: str, index: int):
+        cluster = cluster_or_redirect(key)
+        if cluster is None:
+            return redirect(url_for("index"))
+        return edit_rule(cluster, index, url_for("cluster_detail", key=key))
+
+    @app.post("/clusters/<key>/schedule/<int:index>/delete")
+    def cluster_schedule_delete(key: str, index: int):
+        cluster = cluster_or_redirect(key)
+        if cluster is None:
+            return redirect(url_for("index"))
+        return delete_rule(cluster, index, url_for("cluster_detail", key=key))
+
+    @app.post("/clusters/<key>/schedule/<int:index>/skip")
+    def cluster_schedule_skip(key: str, index: int):
+        cluster = cluster_or_redirect(key)
+        if cluster is None:
+            return redirect(url_for("index"))
+        return skip_rule(cluster, index, cluster_job_prefix(cluster) + str(index), url_for("cluster_detail", key=key))
+
+    # --- Import / export ---
+
+    @app.route("/config")
+    def config_page():
+        return render_template("config.html", env_active=env_config_active())
+
+    @app.route("/config/export")
+    def config_export():
+        filename = f"wol-config-{date.today().isoformat()}.yaml"
+        return Response(
+            config_to_yaml(config),
+            mimetype="application/x-yaml",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+
+    @app.post("/config/import")
+    def config_import():
+        upload = request.files.get("file")
+        if upload is None or not upload.filename:
+            flash("Choose a file to import", "error")
+            return redirect(url_for("config_page"))
+        try:
+            imported = parse_config_text(upload.read().decode("utf-8-sig"))
+        except UnicodeDecodeError:
+            flash("Import failed, nothing was changed: the file isn't UTF-8 text", "error")
+            return redirect(url_for("config_page"))
+        except ConfigError as exc:
+            flash(f"Import failed, nothing was changed: {exc}", "error")
+            return redirect(url_for("config_page"))
+
+        save_config(imported, config_path)
+        # Reload from disk so WOL_* environment variables are applied the same way as on startup.
+        reloaded = load_config(config_path)
+        config.machines = reloaded.machines
+        config.clusters = reloaded.clusters
+        config.status_check = reloaded.status_check
+        config.wol = reloaded.wol
+        config.notifications = reloaded.notifications
+        rebuild_jobs()
+        flash(
+            f"Imported {len(config.machines)} machine(s) and {len(config.clusters)} cluster(s). "
+            "The previous config.yaml was kept in backups/.",
+            "success",
+        )
+        return redirect(url_for("index"))
+
+    @app.errorhandler(413)
+    def upload_too_large(_error):
+        flash("Import failed, nothing was changed: the file is larger than 1 MB", "error")
+        return redirect(url_for("config_page"))
 
     return app
 
@@ -261,6 +477,35 @@ def _rule_from_form(form) -> ScheduleRule:
         raise ConfigError("Time must be in HH:MM format")
     name = form.get("name", "").strip() or f"{action.capitalize()} rule"
     return ScheduleRule(name=name, days=days, time=time_value, action=action)
+
+
+def _cluster_members_from_form(form, machines: list[Machine]) -> tuple[list[str], int]:
+    """Members come from one position field per machine (empty = not a member). Ties keep
+    the machine list order, so '1, 1, 2' is fine and doesn't need renumbering."""
+    positioned = []
+    for list_index, machine in enumerate(machines):
+        raw = form.get(f"pos_{machine.key}", "").strip()
+        if not raw:
+            continue
+        try:
+            position = int(raw)
+        except ValueError:
+            raise ConfigError(f"Position for '{machine.name}' must be a whole number")
+        if position < 1:
+            raise ConfigError(f"Position for '{machine.name}' must be 1 or higher")
+        positioned.append((position, list_index, machine.key))
+    if not positioned:
+        raise ConfigError("Give at least one machine a position to put it in the cluster")
+
+    delay_raw = form.get("delay_seconds", "").strip()
+    try:
+        delay = int(delay_raw) if delay_raw else 60
+    except ValueError:
+        raise ConfigError("Pause must be a whole number of seconds")
+    if delay < 0:
+        raise ConfigError("Pause can't be negative")
+
+    return [key for _, _, key in sorted(positioned)], delay
 
 
 def _machine_from_form(form, existing_keys: set[str]) -> Machine:

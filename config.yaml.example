@@ -61,6 +61,17 @@ machines:
       command: "shutdown -h +1"
     schedule: []
 
+# Optional: clusters group machines so they're woken and shut down together, on their own
+# schedule. members are woken in the listed order and shut down in reverse, delay_seconds
+# apart (e.g. storage first on and last off). Cluster rules run in addition to each machine's
+# own rules.
+clusters:
+  - key: "homelab"
+    name: "Homelab"
+    members: ["pve", "desktop"]
+    delay_seconds: 60
+    schedule: []
+
 # Status check via ping (a Proxmox node's API is unreachable while it's off, so this is the
 # only way to tell whether any machine is currently up). Shared by all machines.
 status_check:

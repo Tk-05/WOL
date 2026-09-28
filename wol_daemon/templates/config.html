@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block title %}Import / export — WOL Daemon{% endblock %}
+
+{% block header %}
+<header>
+  <h1>Import / export</h1>
+  <p>Back up the whole configuration, or move it to another node.</p>
+</header>
+{% endblock %}
+
+{% block content %}
+<h2>Export</h2>
+<div class="card">
+  <p class="card-text">Downloads the complete configuration as a YAML file: machines, clusters, schedules and settings.</p>
+  <p class="card-text muted">It contains Proxmox token secrets in plain text, so store it like a password. SSH private keys are not included, only their paths; copy the key files separately.</p>
+  <a class="btn btn-primary" href="{{ url_for('config_export') }}">Download config</a>
+</div>
+
+<h2>Import</h2>
+<div class="card">
+  <p class="card-text">Replaces the <strong>entire</strong> current configuration with the uploaded file. The file is checked first: if it has any error, nothing changes. The current config.yaml is kept in <code>backups/</code> before it's overwritten.</p>
+  {% if env_active %}
+  <p class="card-text muted">WOL_* environment variables are set on this node, so the machine "default" is taken from them again after the import.</p>
+  {% endif %}
+  <form method="post" action="{{ url_for('config_import') }}" enctype="multipart/form-data" onsubmit="return confirm('Replace the entire configuration with this file?')">
+    <div class="actions-row">
+      <input type="file" name="file" accept=".yaml,.yml" required>
+      <button type="submit" class="btn btn-primary">Import</button>
+    </div>
+  </form>
+</div>
+{% endblock %}

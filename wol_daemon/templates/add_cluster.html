@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block title %}Add cluster — WOL Daemon{% endblock %}
+
+{% block header %}
+<header>
+  <h1>Add cluster</h1>
+  <p>Group machines so they can be woken and shut down together, on their own schedule.</p>
+</header>
+{% endblock %}
+
+{% block content %}
+<div class="card">
+  <form method="post" action="{{ url_for('cluster_add') }}">
+    <div class="form-grid">
+      <div>
+        <label class="field-label">Key</label>
+        <input type="text" name="key" placeholder="homelab" required>
+      </div>
+    </div>
+    {% include "_cluster_fields.html" %}
+    <div style="margin-top: 1.25rem;"><button type="submit" class="btn btn-primary">Add cluster</button></div>
+  </form>
+</div>
+{% endblock %}

@@ -60,8 +60,22 @@ body {
 header { margin-bottom: 1.75rem; }
 h1 { font-size: 1.5rem; font-weight: 650; margin: 0 0 0.2rem; letter-spacing: -0.01em; }
 header p { margin: 0; color: var(--text-muted); font-size: 0.9rem; }
-.back-link { display: inline-block; margin-bottom: 0.6rem; font-size: 0.85rem; color: var(--text-muted); text-decoration: none; }
-.back-link:hover { color: var(--text); }
+header p a { color: inherit; }
+
+.topnav {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem 1rem;
+  padding-bottom: 0.9rem;
+  margin-bottom: 1.75rem;
+  border-bottom: 1px solid var(--border);
+}
+.topnav a { color: var(--text-muted); text-decoration: none; font-size: 0.88rem; }
+.topnav a:hover { color: var(--text); }
+.topnav .topnav-brand { color: var(--text); font-weight: 650; font-size: 0.95rem; }
+.topnav-links { display: flex; flex-wrap: wrap; gap: 0.4rem 1.1rem; }
 
 h2 {
   font-size: 0.78rem;
@@ -143,7 +157,7 @@ details[open] summary { margin-bottom: 0.75rem; }
 
 label.field-label { display: block; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); margin-bottom: 0.3rem; }
 
-input[type="text"], input[type="time"], select {
+input[type="text"], input[type="time"], input[type="number"], input[type="file"], select {
   font: inherit;
   font-size: 0.88rem;
   padding: 0.42rem 0.6rem;
@@ -152,7 +166,7 @@ input[type="text"], input[type="time"], select {
   background: var(--surface);
   color: var(--text);
 }
-input[type="text"]:focus, input[type="time"]:focus, select:focus {
+input[type="text"]:focus, input[type="time"]:focus, input[type="number"]:focus, select:focus {
   outline: 2px solid var(--primary);
   outline-offset: 1px;
 }
@@ -189,6 +203,20 @@ input[type="text"]:focus, input[type="time"]:focus, select:focus {
 }
 
 .muted { color: var(--text-muted); }
+
+.form-hint { font-size: 0.8rem; margin: 0.4rem 0 0.75rem; }
+.card .form-hint:last-child { margin-bottom: 0; }
+.card-text { margin: 0 0 0.9rem; font-size: 0.9rem; }
+code { font-family: ui-monospace, "SF Mono", Consolas, monospace; font-size: 0.85em; }
+
+.member-list { display: flex; flex-direction: column; gap: 0.4rem; }
+.member-row { display: flex; align-items: center; gap: 0.7rem; font-size: 0.9rem; }
+.member-row input[type="number"] { width: 4.5rem; }
+
+.cluster-members { margin: 0 0 1.1rem; padding-left: 1.4rem; font-size: 0.92rem; }
+.cluster-members li { margin-bottom: 0.25rem; }
+.cluster-members li .status-dot { display: inline-block; margin-right: 0.45rem; vertical-align: middle; }
+.cluster-members a { color: inherit; }
 
 .header-row { display: flex; justify-content: space-between; align-items: start; gap: 1rem; }
 
