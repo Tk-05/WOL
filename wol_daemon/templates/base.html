@@ -9,11 +9,16 @@
 <body>
   <nav class="topnav">
     <a class="topnav-brand" href="{{ url_for('index') }}">WOL Daemon</a>
+    {% if logged_in %}
     <div class="topnav-links">
       <a href="{{ url_for('machine_add') }}">Add machine</a>
       <a href="{{ url_for('cluster_add') }}">Add cluster</a>
-      <a href="{{ url_for('config_page') }}">Import / export</a>
+      <a href="{{ url_for('config_page') }}">Settings</a>
+      <form class="inline" method="post" action="{{ url_for('logout') }}">
+        <button type="submit" class="topnav-button">Log out</button>
+      </form>
     </div>
+    {% endif %}
   </nav>
 
   {% block header %}{% endblock %}

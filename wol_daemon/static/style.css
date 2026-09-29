@@ -75,7 +75,32 @@ header p a { color: inherit; }
 .topnav a { color: var(--text-muted); text-decoration: none; font-size: 0.88rem; }
 .topnav a:hover { color: var(--text); }
 .topnav .topnav-brand { color: var(--text); font-weight: 650; font-size: 0.95rem; }
-.topnav-links { display: flex; flex-wrap: wrap; gap: 0.4rem 1.1rem; }
+.topnav-links { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem 1.1rem; }
+.topnav-button {
+  font: inherit;
+  font-size: 0.88rem;
+  color: var(--text-muted);
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+}
+.topnav-button:hover { color: var(--text); }
+
+.auth-card { max-width: 380px; }
+.auth-card input[type="password"] { width: 100%; }
+.key-card { border-color: var(--primary); margin-bottom: 0.5rem; }
+.api-key {
+  display: block;
+  padding: 0.6rem 0.8rem;
+  margin-bottom: 0.9rem;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 0.9rem;
+  word-break: break-all;
+  user-select: all;
+}
 
 h2 {
   font-size: 0.78rem;
@@ -228,7 +253,7 @@ code { font-family: ui-monospace, "SF Mono", Consolas, monospace; font-size: 0.8
 
 .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.9rem; margin-bottom: 1rem; }
 .form-grid > div { display: flex; flex-direction: column; }
-.form-grid input[type="text"], .form-grid input[type="number"] { width: 100%; }
+.form-grid input[type="text"], .form-grid input[type="number"], .form-grid input[type="password"] { width: 100%; }
 @media (max-width: 520px) { .form-grid { grid-template-columns: 1fr; } }
 
 .checkbox-row { display: flex; align-items: center; gap: 0.4rem; font-size: 0.88rem; margin-top: 0.3rem; }

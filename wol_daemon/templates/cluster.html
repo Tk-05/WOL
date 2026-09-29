@@ -5,7 +5,9 @@
 <header class="header-row">
   <div>
     <h1>{{ cluster.name }}</h1>
-    <p>Cluster · {{ cluster.members|length }} machine(s) · {{ cluster.delay_seconds }}s pause</p>
+    <p>Cluster · {{ cluster.members|length }} machine(s) ·
+      {% if cluster.max_wait_seconds %}waits up to {{ cluster.max_wait_seconds }}s per machine{% else %}no waiting{% endif %}
+      · {{ cluster.delay_seconds }}s pause</p>
   </div>
   <form method="post" action="{{ url_for('cluster_delete', key=cluster.key) }}" onsubmit="return confirm('Really delete this cluster and its schedule? The machines themselves are kept.')">
     <button type="submit" class="btn btn-outline-danger btn-sm">Delete cluster</button>
@@ -47,7 +49,11 @@
       <button type="submit" class="btn btn-outline-danger" {{ 'disabled' if not cluster.members else '' }}>Shut down all</button>
     </form>
   </div>
-  <p class="form-hint muted">Woken top to bottom, shut down bottom to top, {{ cluster.delay_seconds }}s apart. Cluster rules run in addition to each machine's own rules.</p>
+  {% if cluster.max_wait_seconds %}
+  <p class="form-hint muted">Woken top to bottom: each machine once the previous one is online (at most {{ cluster.max_wait_seconds }}s, then it carries on anyway), plus a {{ cluster.delay_seconds }}s pause. Shut down bottom to top, waiting until each is off. Starting a new action cancels one that's still running. Cluster rules run in addition to each machine's own rules.</p>
+  {% else %}
+  <p class="form-hint muted">Woken top to bottom, shut down bottom to top, {{ cluster.delay_seconds }}s apart without waiting for each machine. Cluster rules run in addition to each machine's own rules.</p>
+  {% endif %}
 
   {% include "_owner_log.html" %}
 

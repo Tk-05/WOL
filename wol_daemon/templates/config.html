@@ -1,14 +1,66 @@
 {% extends "base.html" %}
-{% block title %}Import / export — WOL Daemon{% endblock %}
+{% block title %}Settings — WOL Daemon{% endblock %}
 
 {% block header %}
 <header>
-  <h1>Import / export</h1>
-  <p>Back up the whole configuration, or move it to another node.</p>
+  <h1>Settings</h1>
+  <p>Login, API access, and backing up or moving the configuration.</p>
 </header>
 {% endblock %}
 
 {% block content %}
+{% if new_api_key %}
+<div class="card key-card">
+  <p class="card-text"><strong>Your new API key.</strong> Copy it now: it's only stored as a hash and can't be shown again.</p>
+  <code class="api-key">{{ new_api_key }}</code>
+  <p class="card-text muted">Send it with every API request as the header <code>Authorization: Bearer &lt;key&gt;</code>. Examples for Home Assistant and Uptime Kuma are in docs/api.md.</p>
+</div>
+{% endif %}
+
+<h2>Password</h2>
+<div class="card">
+  <p class="card-text">Changing it logs out every other browser.</p>
+  <form method="post" action="{{ url_for('settings_password') }}">
+    <div class="form-grid">
+      <div>
+        <label class="field-label" for="current">Current password</label>
+        <input type="password" id="current" name="current" autocomplete="current-password" required>
+      </div>
+      <div></div>
+      <div>
+        <label class="field-label" for="password">New password (at least {{ min_length }} characters)</label>
+        <input type="password" id="password" name="password" autocomplete="new-password" minlength="{{ min_length }}" required>
+      </div>
+      <div>
+        <label class="field-label" for="confirm">Repeat new password</label>
+        <input type="password" id="confirm" name="confirm" autocomplete="new-password" minlength="{{ min_length }}" required>
+      </div>
+    </div>
+    <button type="submit" class="btn btn-primary">Change password</button>
+  </form>
+</div>
+
+<h2>API key</h2>
+<div class="card">
+  <p class="card-text">The status API (<code>/api/machines</code>, <code>/api/clusters</code>) for Home Assistant, Uptime Kuma and the like needs this key.</p>
+  {% if has_api_key %}
+  <p class="card-text muted">A key exists{% if api_key_created %}, created {{ api_key_created }}{% endif %}. Generating a new one replaces it, so update it wherever it's in use.</p>
+  <div class="actions-row">
+    <form class="inline" method="post" action="{{ url_for('settings_api_key') }}" onsubmit="return confirm('Replace the API key? Services still using the old one stop working.')">
+      <button type="submit" class="btn btn-outline">Generate new key</button>
+    </form>
+    <form class="inline" method="post" action="{{ url_for('settings_api_key_delete') }}" onsubmit="return confirm('Revoke the API key? Services using it stop working.')">
+      <button type="submit" class="btn btn-outline-danger">Revoke key</button>
+    </form>
+  </div>
+  {% else %}
+  <p class="card-text muted">No key yet, so the API only answers browsers that are logged in.</p>
+  <form method="post" action="{{ url_for('settings_api_key') }}">
+    <button type="submit" class="btn btn-primary">Generate API key</button>
+  </form>
+  {% endif %}
+</div>
+
 <h2>Export</h2>
 <div class="card">
   <p class="card-text">Downloads the complete configuration as a YAML file: machines, clusters, schedules and settings.</p>

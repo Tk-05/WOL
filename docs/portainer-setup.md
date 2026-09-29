@@ -97,11 +97,30 @@ it won't silently fall back to a half-configured state.
 Deploy the stack. Portainer creates the `wol-config` named volume
 automatically — no host filesystem access needed.
 
-Open `http://<pi-ip>:9090`. Without environment variables you'll see "No
-machines configured yet"; use **Add your first machine**. Then add schedule
-rules on each machine's page (the "New rule" form at the bottom). This is the
-same UI regardless of how you deployed, and it's the only place the schedule
-is ever edited.
+Open `http://<pi-ip>:9090`. On the very first visit you're asked to set a
+login password (see "Login" below). Without environment variables you'll then
+see "No machines configured yet"; use **Add your first machine**. Then add
+schedule rules on each machine's page (the "New rule" form at the bottom). This
+is the same UI regardless of how you deployed, and it's the only place the
+schedule is ever edited.
+
+## Login
+
+The web UI needs a password, which you set in the browser on first visit. Set
+it right after deploying: until then, anyone on the network who opens the page
+first could choose it. It's stored only as a hash, in `auth.yaml` next to
+`config.yaml` in the `wol-config` volume; config import/export never touches
+it. A login lasts 30 days and survives restarts. Change the password under
+**Settings**; that logs out every other browser.
+
+Forgot it? Delete the file and restart the container, then set a new one:
+
+```sh
+docker exec wol-daemon rm /config/auth.yaml
+docker restart wol-daemon
+```
+
+This also revokes the API key.
 
 ## Timezone
 
@@ -160,20 +179,31 @@ than trying to bake it into an environment variable.
 
 A cluster groups machines so they can be woken and shut down together
 (**Add cluster** in the top navigation). Each member gets a position: members
-are woken in that order and shut down in reverse, with a configurable pause in
-between, e.g. the NAS first on and last off so the Proxmox nodes find their
-storage. A cluster has its own schedule, which runs in addition to each
-member's own rules. Deleting a machine removes it from its clusters; deleting a
-cluster keeps its machines.
+are woken in that order and shut down in reverse, e.g. the NAS first on and
+last off so the Proxmox nodes find their storage.
+
+Each next machine only starts once the previous one answers pings (or, when
+shutting down, stops answering), so a NAS that takes longer to boot than usual
+doesn't leave the nodes without storage. "Max. wait" caps that per machine
+(default 300 seconds); if a machine isn't there by then, the cluster logs a
+warning and carries on with the rest. The pause runs after each machine, e.g.
+for its services to finish starting. A max. wait of 0 turns the waiting off, so
+machines just start "pause" seconds apart. Starting a new action for a cluster
+cancels one that's still running.
+
+A cluster has its own schedule, which runs in addition to each member's own
+rules. Deleting a machine removes it from its clusters; deleting a cluster
+keeps its machines.
 
 ## Status for other services
 
 Home Assistant, Uptime Kuma and similar can read the status of every machine and
-cluster as JSON, e.g. `http://<host>:9090/api/machines/<key>`. See [api.md](api.md).
+cluster as JSON, e.g. `http://<host>:9090/api/machines/<key>`, with an API key
+from **Settings**. See [api.md](api.md).
 
 ## Export and import
 
-**Import / export** in the top navigation downloads the complete configuration
+**Settings** in the top navigation downloads the complete configuration
 as YAML, or replaces it with an uploaded file. An import is validated first and
 changes nothing if the file has any error; the previous `config.yaml` is kept
 in `backups/`. The export contains Proxmox token secrets in plain text, so

@@ -74,8 +74,11 @@ class Cluster:
     key: str
     name: str
     members: list[str]  # machine keys in wake order; shut down in reverse
-    delay_seconds: int
+    delay_seconds: int  # extra pause after each machine is up (or down), before the next one
     schedule: list[ScheduleRule]
+    # How long to wait for each machine to come up (or go down) before continuing anyway;
+    # 0 = don't wait at all, just pause delay_seconds between machines.
+    max_wait_seconds: int = 300
 
 
 @dataclass
@@ -242,8 +245,10 @@ def _parse_clusters(entries: list, machine_keys: set[str]) -> list[Cluster]:
         if len(set(members)) != len(members):
             raise ConfigError(f"A machine is listed more than once in {section}.members")
         delay = entry.get("delay_seconds", 60)
-        if not isinstance(delay, int) or delay < 0:
-            raise ConfigError(f"delay_seconds in {section} must be a whole number of seconds, 0 or more")
+        max_wait = entry.get("max_wait_seconds", 300)
+        for field_name, value in (("delay_seconds", delay), ("max_wait_seconds", max_wait)):
+            if not isinstance(value, int) or value < 0:
+                raise ConfigError(f"{field_name} in {section} must be a whole number of seconds, 0 or more")
         clusters.append(
             Cluster(
                 key=key,
@@ -251,6 +256,7 @@ def _parse_clusters(entries: list, machine_keys: set[str]) -> list[Cluster]:
                 members=members,
                 delay_seconds=delay,
                 schedule=_parse_schedule(entry.get("schedule", [])),
+                max_wait_seconds=max_wait,
             )
         )
     return clusters
@@ -476,6 +482,7 @@ def config_to_dict(config: AppConfig) -> dict:
                 "name": cluster.name,
                 "members": cluster.members,
                 "delay_seconds": cluster.delay_seconds,
+                "max_wait_seconds": cluster.max_wait_seconds,
                 "schedule": _schedule_to_list(cluster.schedule),
             }
             for cluster in config.clusters

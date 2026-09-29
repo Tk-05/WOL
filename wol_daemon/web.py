@@ -2,15 +2,17 @@ from __future__ import annotations
 
 import logging
 import re
-import secrets
+import time
 from concurrent.futures import ThreadPoolExecutor
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Callable
+from urllib.parse import urlsplit
 
 from apscheduler.schedulers.background import BackgroundScheduler
-from flask import Flask, Response, abort, flash, jsonify, redirect, render_template, request, url_for
+from flask import Flask, Response, abort, flash, jsonify, redirect, render_template, request, session, url_for
 
+from .auth import MIN_PASSWORD_LENGTH, AuthStore
 from .config import (
     AppConfig,
     Cluster,
@@ -52,6 +54,18 @@ def _log(owner: str | None, message: str, *args) -> None:
     logger.info(message, *args, extra={"owners": (owner,) if owner else ()})
 
 
+def _safe_local_path(target: str | None) -> str | None:
+    """Only a path within this app; a full URL or "//host" would make redirects to it an
+    open redirect."""
+    if target and target.startswith("/") and not target.startswith("//") and "\\" not in target:
+        return target
+    return None
+
+
+# Reachable without logging in. Everything under /api uses the API key instead.
+_PUBLIC_ENDPOINTS = {"static", "login", "setup", "healthz"}
+
+
 def create_app(
     config_path: Path,
     config: AppConfig,
@@ -63,13 +77,107 @@ def create_app(
     rebuild_jobs: Callable[[], None],
 ) -> Flask:
     app = Flask(__name__)
-    app.secret_key = secrets.token_hex(16)
-    app.config["MAX_CONTENT_LENGTH"] = 1024 * 1024  # config imports are tiny; refuse anything big
+    auth = AuthStore(Path(config_path).parent / "auth.yaml")
+    # Persisted, so logins survive restarts and redeploys.
+    app.secret_key = auth.session_secret()
+    app.config.update(
+        MAX_CONTENT_LENGTH=1024 * 1024,  # config imports are tiny; refuse anything big
+        SESSION_COOKIE_HTTPONLY=True,
+        # Lax: the browser doesn't send the login cookie with form posts from other sites.
+        SESSION_COOKIE_SAMESITE="Lax",
+        PERMANENT_SESSION_LIFETIME=timedelta(days=30),
+    )
     app.json.sort_keys = False  # keep the API's field order as documented in docs/api.md
+
+    def logged_in() -> bool:
+        return auth.has_password and session.get("auth") == auth.password_fingerprint()
+
+    def log_in() -> None:
+        session.clear()
+        session.permanent = True
+        session["auth"] = auth.password_fingerprint()
+
+    def api_key_ok() -> bool:
+        header = request.headers.get("Authorization", "")
+        scheme, _, key = header.partition(" ")
+        return scheme.lower() == "bearer" and auth.check_api_key(key.strip())
+
+    def same_origin() -> bool:
+        origin = request.headers.get("Origin")
+        # No Origin: not a browser form post from another site (curl, scripts, old browsers).
+        return origin is None or urlsplit(origin).netloc == request.host
+
+    @app.before_request
+    def require_login():
+        # Second line of defence behind SameSite: refuse state-changing requests that a
+        # browser sent on behalf of another site.
+        if request.method not in ("GET", "HEAD", "OPTIONS") and not same_origin():
+            abort(403)
+        endpoint = request.endpoint
+        if endpoint is None or endpoint in _PUBLIC_ENDPOINTS:
+            return None
+        if request.path.startswith("/api/"):
+            if logged_in() or api_key_ok():
+                return None
+            return api_response(
+                {"error": "API key required: create one under Settings and send it as 'Authorization: Bearer <key>'"},
+                401,
+            )
+        if not auth.has_password:
+            return redirect(url_for("setup"))
+        if not logged_in():
+            wanted = request.full_path.rstrip("?") if request.method == "GET" else None
+            return redirect(url_for("login", next=wanted) if wanted and wanted != "/" else url_for("login"))
+        return None
 
     @app.context_processor
     def template_globals():
-        return {"timezone": str(scheduler.timezone)}
+        return {"timezone": str(scheduler.timezone), "logged_in": logged_in()}
+
+    @app.route("/healthz")
+    def healthz():
+        return "ok"
+
+    @app.route("/setup", methods=["GET", "POST"])
+    def setup():
+        if auth.has_password:
+            return redirect(url_for("login"))
+        if request.method == "GET":
+            return render_template("setup.html", min_length=MIN_PASSWORD_LENGTH)
+        password = request.form.get("password", "")
+        if password != request.form.get("confirm", ""):
+            flash("The two passwords don't match", "error")
+            return redirect(url_for("setup"))
+        try:
+            auth.set_password(password)
+        except ValueError as exc:
+            flash(str(exc), "error")
+            return redirect(url_for("setup"))
+        log_in()
+        _log(None, "Login password set")
+        flash("Password set, you're logged in", "success")
+        return redirect(url_for("index"))
+
+    @app.route("/login", methods=["GET", "POST"])
+    def login():
+        if not auth.has_password:
+            return redirect(url_for("setup"))
+        target = _safe_local_path(request.values.get("next")) or url_for("index")
+        if request.method == "GET":
+            if logged_in():
+                return redirect(target)
+            return render_template("login.html", next=request.args.get("next", ""))
+        if not auth.check_password(request.form.get("password", "")):
+            time.sleep(1)  # slows down guessing
+            flash("Wrong password", "error")
+            return redirect(url_for("login", next=_safe_local_path(request.form.get("next"))))
+        log_in()
+        return redirect(target)
+
+    @app.post("/logout")
+    def logout():
+        session.clear()
+        return redirect(url_for("login"))
 
     def get_machine(key: str) -> Machine | None:
         return next((m for m in config.machines if m.key == key), None)
@@ -164,6 +272,7 @@ def create_app(
             "online": online,
             "total": len(members),
             "delay_seconds": cluster.delay_seconds,
+            "max_wait_seconds": cluster.max_wait_seconds,
             "members": [{"key": m.key, "name": m.name, "online": status.get(m.key, False)} for m in members],
             "last_action": last_action_json(owner_event_key(cluster)),
             "next_action": next_action_json(cluster_job_prefix(cluster), cluster.schedule),
@@ -197,6 +306,7 @@ def create_app(
             "key": cluster.key,
             "name": cluster.name,
             "delay_seconds": cluster.delay_seconds,
+            "max_wait_seconds": cluster.max_wait_seconds,
             "members": [{"key": m.key, "name": m.name, "host_up": status.get(m.key, False)} for m in members],
             "online": sum(1 for m in members if status.get(m.key)),
             "last_action": last_action_str(owner_event_key(cluster)),
@@ -294,11 +404,7 @@ def create_app(
 
     def redirect_back(default: str):
         """Return to the page a form was submitted from (e.g. the overview), if it said so."""
-        target = request.form.get("next", "")
-        # Only a local path: a full URL or "//host" here would turn this into an open redirect.
-        if target.startswith("/") and not target.startswith("//") and "\\" not in target:
-            return redirect(target)
-        return redirect(default)
+        return redirect(_safe_local_path(request.form.get("next")) or default)
 
     def flash_action_result(machine: Machine) -> None:
         record = event_log.last_action_for(machine.key)
@@ -470,7 +576,8 @@ def create_app(
     def cluster_add():
         if request.method == "GET":
             return render_template(
-                "add_cluster.html", machines=machine_choices(), cluster_name="", delay_seconds=60, positions={}
+                "add_cluster.html", machines=machine_choices(), cluster_name="",
+                delay_seconds=60, max_wait_seconds=300, positions={},
             )
         try:
             key = request.form.get("key", "").strip().lower()
@@ -478,12 +585,14 @@ def create_app(
                 raise ConfigError("Key must use lowercase letters, digits and hyphens only, e.g. 'homelab'")
             if get_cluster(key) is not None:
                 raise ConfigError(f"A cluster with key '{key}' already exists")
-            members, delay = _cluster_members_from_form(request.form, config.machines)
+            members, delay, max_wait = _cluster_members_from_form(request.form, config.machines)
         except ConfigError as exc:
             flash(str(exc), "error")
             return redirect(url_for("cluster_add"))
         name = request.form.get("name", "").strip() or key
-        cluster = Cluster(key=key, name=name, members=members, delay_seconds=delay, schedule=[])
+        cluster = Cluster(
+            key=key, name=name, members=members, delay_seconds=delay, schedule=[], max_wait_seconds=max_wait
+        )
         config.clusters.append(cluster)
         save_config(config, config_path)
         _log(owner_event_key(cluster), "Cluster '%s' added (%s)", cluster.name, _cluster_summary_text(cluster, config))
@@ -505,6 +614,7 @@ def create_app(
             positions={member: i + 1 for i, member in enumerate(cluster.members)},
             cluster_name=cluster.name,
             delay_seconds=cluster.delay_seconds,
+            max_wait_seconds=cluster.max_wait_seconds,
             owner_key=cluster.key,
             sched_ep="cluster_schedule",
             owner_events=event_log.recent_events_for(owner_event_key(cluster)),
@@ -516,16 +626,17 @@ def create_app(
         if cluster is None:
             return redirect(url_for("index"))
         try:
-            members, delay = _cluster_members_from_form(request.form, config.machines)
+            members, delay, max_wait = _cluster_members_from_form(request.form, config.machines)
         except ConfigError as exc:
             flash(str(exc), "error")
             return redirect(url_for("cluster_detail", key=key))
-        before = (cluster.name, list(cluster.members), cluster.delay_seconds)
+        before = (cluster.name, list(cluster.members), cluster.delay_seconds, cluster.max_wait_seconds)
         cluster.name = request.form.get("name", "").strip() or cluster.name
         cluster.members = members
         cluster.delay_seconds = delay
+        cluster.max_wait_seconds = max_wait
         save_config(config, config_path)
-        if (cluster.name, cluster.members, cluster.delay_seconds) != before:
+        if (cluster.name, cluster.members, cluster.delay_seconds, cluster.max_wait_seconds) != before:
             _log(owner_event_key(cluster), "Cluster '%s' changed (%s)", cluster.name, _cluster_summary_text(cluster, config))
         flash("Cluster saved", "success")
         return redirect(url_for("cluster_detail", key=key))
@@ -551,10 +662,7 @@ def create_app(
         if action in VALID_ACTIONS:
             run_cluster(cluster, action)
             verb = "Waking" if action == "on" else "Shutting down"
-            flash(
-                f"{verb} {len(cluster.members)} machine(s), {cluster.delay_seconds}s apart — see the event log",
-                "success",
-            )
+            flash(f"{verb} {len(cluster.members)} machine(s) one after another — see the event log", "success")
         return redirect_back(url_for("cluster_detail", key=key))
 
     @app.post("/clusters/<key>/schedule/add")
@@ -587,9 +695,55 @@ def create_app(
 
     # --- Import / export ---
 
+    def render_settings(new_api_key: str | None = None):
+        return render_template(
+            "config.html",
+            env_active=env_config_active(),
+            min_length=MIN_PASSWORD_LENGTH,
+            has_api_key=auth.has_api_key,
+            api_key_created=auth.api_key_created,
+            new_api_key=new_api_key,
+        )
+
     @app.route("/config")
     def config_page():
-        return render_template("config.html", env_active=env_config_active())
+        return render_settings()
+
+    @app.post("/settings/password")
+    def settings_password():
+        if not auth.check_password(request.form.get("current", "")):
+            time.sleep(1)
+            flash("Current password is wrong", "error")
+            return redirect(url_for("config_page"))
+        password = request.form.get("password", "")
+        if password != request.form.get("confirm", ""):
+            flash("The two new passwords don't match", "error")
+            return redirect(url_for("config_page"))
+        try:
+            auth.set_password(password)
+        except ValueError as exc:
+            flash(str(exc), "error")
+            return redirect(url_for("config_page"))
+        log_in()  # this browser stays logged in; every other one is logged out
+        _log(None, "Login password changed")
+        flash("Password changed. Other browsers have been logged out.", "success")
+        return redirect(url_for("config_page"))
+
+    @app.post("/settings/api-key")
+    def settings_api_key():
+        replaced = auth.has_api_key
+        key = auth.create_api_key()
+        _log(None, "API key %s", "regenerated" if replaced else "created")
+        # Rendered directly instead of redirecting, so the key never passes through the
+        # session cookie; it's shown this once only.
+        return render_settings(new_api_key=key)
+
+    @app.post("/settings/api-key/delete")
+    def settings_api_key_delete():
+        auth.revoke_api_key()
+        _log(None, "API key revoked")
+        flash("API key revoked. The status API now only answers logged-in browsers.", "success")
+        return redirect(url_for("config_page"))
 
     @app.route("/config/export")
     def config_export():
@@ -691,7 +845,8 @@ def _rule_summary(rule: ScheduleRule) -> str:
 def _cluster_summary_text(cluster: Cluster, config: AppConfig) -> str:
     names = {m.key: m.name for m in config.machines}
     order = " → ".join(names.get(key, key) for key in cluster.members) or "no members"
-    return f"{order}, {cluster.delay_seconds}s pause"
+    wait = f"waits up to {cluster.max_wait_seconds}s" if cluster.max_wait_seconds else "no waiting"
+    return f"{order}, {wait}, {cluster.delay_seconds}s pause"
 
 
 def _rule_from_form(form) -> ScheduleRule:
@@ -709,7 +864,18 @@ def _rule_from_form(form) -> ScheduleRule:
     return ScheduleRule(name=name, days=days, time=time_value, action=action)
 
 
-def _cluster_members_from_form(form, machines: list[Machine]) -> tuple[list[str], int]:
+def _seconds_field(form, name: str, default: int, label: str) -> int:
+    raw = form.get(name, "").strip()
+    try:
+        value = int(raw) if raw else default
+    except ValueError:
+        raise ConfigError(f"{label} must be a whole number of seconds")
+    if value < 0:
+        raise ConfigError(f"{label} can't be negative")
+    return value
+
+
+def _cluster_members_from_form(form, machines: list[Machine]) -> tuple[list[str], int, int]:
     """Members come from one position field per machine (empty = not a member). Ties keep
     the machine list order, so '1, 1, 2' is fine and doesn't need renumbering."""
     positioned = []
@@ -727,15 +893,9 @@ def _cluster_members_from_form(form, machines: list[Machine]) -> tuple[list[str]
     if not positioned:
         raise ConfigError("Give at least one machine a position to put it in the cluster")
 
-    delay_raw = form.get("delay_seconds", "").strip()
-    try:
-        delay = int(delay_raw) if delay_raw else 60
-    except ValueError:
-        raise ConfigError("Pause must be a whole number of seconds")
-    if delay < 0:
-        raise ConfigError("Pause can't be negative")
-
-    return [key for _, _, key in sorted(positioned)], delay
+    delay = _seconds_field(form, "delay_seconds", 60, "Pause")
+    max_wait = _seconds_field(form, "max_wait_seconds", 300, "Maximum wait")
+    return [key for _, _, key in sorted(positioned)], delay, max_wait
 
 
 def _machine_from_form(form, existing_keys: set[str]) -> Machine:

@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-import functools
 import logging
 import signal
 import sys
-from datetime import datetime, timedelta
+import threading
+import time
 from pathlib import Path
 
 import requests
@@ -90,6 +90,13 @@ def _shutdown_client(shutdown: ProxmoxShutdown | SshShutdown):
     return SshClient(shutdown)
 
 
+# One running wake/shutdown sequence per cluster, keyed by cluster key. Starting a new one
+# cancels the old one, so e.g. "Shut down all" isn't stuck behind a slow "Wake all".
+_running_sequences: dict[str, threading.Event] = {}
+_sequences_lock = threading.Lock()
+POLL_SECONDS = 5
+
+
 def cluster_action(
     config: AppConfig,
     cluster: Cluster,
@@ -98,39 +105,120 @@ def cluster_action(
     scheduler: BackgroundScheduler,
     source: str = "schedule",
 ) -> None:
-    """Wake the members in order, or shut them down in reverse order, delay_seconds apart.
-    Each step is its own scheduler job, so a web request triggering this returns at once."""
+    """Wake the members in order, or shut them down in reverse order. Unless max_wait_seconds
+    is 0, each next machine only starts once the previous one is up (or down), or once
+    max_wait_seconds have passed; then delay_seconds more. Runs in its own thread, since a
+    sequence can take minutes, so a web request triggering it returns at once."""
     by_key = {m.key: m for m in config.machines}
     members = [by_key[key] for key in cluster.members if key in by_key]
     if action == "off":
         members.reverse()
 
+    cancel = threading.Event()
+    with _sequences_lock:
+        previous = _running_sequences.get(cluster.key)
+        if previous is not None:
+            previous.set()
+        _running_sequences[cluster.key] = cancel
+
     cluster_owner = owner_event_key(cluster)
+    extra = {"owners": (cluster_owner,)}
+    if previous is not None:
+        logger.info("Cluster '%s': previous sequence cancelled", cluster.name, extra=extra)
     verb = "waking" if action == "on" else "shutting down"
-    logger.info(
-        "Cluster '%s': %s %d machine(s), %ds apart", cluster.name, verb, len(members), cluster.delay_seconds,
-        extra={"owners": (cluster_owner,)},
-    )
-    event_log.record_action(
-        cluster_owner, action, source, "started", f"{len(members)} machine(s), {cluster.delay_seconds}s apart"
+    plan = _describe_sequence(cluster, action, len(members))
+    logger.info("Cluster '%s': %s %s", cluster.name, verb, plan, extra=extra)
+    event_log.record_action(cluster_owner, action, source, "started", plan)
+
+    threading.Thread(
+        target=_run_sequence,
+        args=(config, cluster, action, members, event_log, scheduler, source, cancel),
+        name=f"cluster-{cluster.key}",
+        daemon=True,
+    ).start()
+
+
+def _describe_sequence(cluster: Cluster, action: str, count: int) -> str:
+    if cluster.max_wait_seconds == 0:
+        return f"{count} machine(s), {cluster.delay_seconds}s apart"
+    state = "online" if action == "on" else "off"
+    return (
+        f"{count} machine(s), each after the previous is {state} "
+        f"(max {cluster.max_wait_seconds}s) plus {cluster.delay_seconds}s"
     )
 
+
+def _run_sequence(
+    config: AppConfig,
+    cluster: Cluster,
+    action: str,
+    members: list[Machine],
+    event_log: EventLog,
+    scheduler: BackgroundScheduler,
+    source: str,
+    cancel: threading.Event,
+) -> None:
+    cluster_owner = owner_event_key(cluster)
+    want_up = action == "on"
+    state = "online" if want_up else "off"
     step_source = f"cluster:{cluster.key}"
-    start = datetime.now()
-    for i, machine in enumerate(members):
-        if action == "on":
-            step = functools.partial(
-                turn_on, config, machine, event_log, scheduler, step_source, log_owners=(cluster_owner,)
-            )
+    problems: list[str] = []
+    started = time.monotonic()
+    try:
+        for i, machine in enumerate(members):
+            if cancel.is_set():
+                event_log.record_action(cluster_owner, action, source, "cancelled", "replaced by a newer action")
+                return
+            if want_up:
+                turn_on(config, machine, event_log, scheduler, step_source, log_owners=(cluster_owner,))
+            else:
+                turn_off(config, machine, event_log, step_source, log_owners=(cluster_owner,))
+
+            record = event_log.last_action_for(machine.key)
+            if record is not None and record.result == "error":
+                problems.append(machine.name)
+            if i == len(members) - 1:
+                break
+
+            both = {"owners": (cluster_owner, machine.key)}
+            if cluster.max_wait_seconds > 0 and record is not None and record.result == "ok":
+                waited = _wait_for_state(config, machine, want_up, cluster.max_wait_seconds, cancel)
+                if waited is not None:
+                    logger.info("'%s' is %s after %ds", machine.name, state, waited, extra=both)
+                elif not cancel.is_set():
+                    logger.warning(
+                        "'%s' still not %s after %ds, continuing with the next machine",
+                        machine.name, state, cluster.max_wait_seconds, extra=both,
+                    )
+                    problems.append(machine.name)
+            if cancel.wait(cluster.delay_seconds):
+                continue  # the check at the top of the loop records the cancellation
+
+        elapsed = int(time.monotonic() - started)
+        if problems:
+            detail = f"finished after {elapsed}s; problems with: {', '.join(problems)}"
         else:
-            step = functools.partial(turn_off, config, machine, event_log, step_source, log_owners=(cluster_owner,))
-        # No misfire limit: a step must not be dropped just because the scheduler ran it late.
-        scheduler.add_job(
-            step,
-            trigger="date",
-            run_date=start + timedelta(seconds=i * cluster.delay_seconds),
-            misfire_grace_time=None,
-        )
+            detail = f"all {len(members)} machine(s) done after {elapsed}s"
+        logger.info("Cluster '%s': %s", cluster.name, detail, extra={"owners": (cluster_owner,)})
+        event_log.record_action(cluster_owner, action, source, "error" if problems else "ok", detail)
+    finally:
+        with _sequences_lock:
+            if _running_sequences.get(cluster.key) is cancel:
+                del _running_sequences[cluster.key]
+
+
+def _wait_for_state(
+    config: AppConfig, machine: Machine, want_up: bool, max_wait: int, cancel: threading.Event
+) -> int | None:
+    """Seconds until the machine answered pings (want_up) or stopped answering; None if it
+    didn't within max_wait, or the sequence was cancelled meanwhile."""
+    start = time.monotonic()
+    while True:
+        if is_host_up(machine.ip_address, config.status_check.timeout_seconds) == want_up:
+            return int(time.monotonic() - start)
+        remaining = max_wait - (time.monotonic() - start)
+        if remaining <= 0 or cancel.wait(min(POLL_SECONDS, remaining)):
+            return None
 
 
 def on_rule_skipped(

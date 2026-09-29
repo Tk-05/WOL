@@ -1,18 +1,24 @@
 {# Shared cluster fields. Expects: machines (key/name), positions (key -> position),
-   cluster_name, delay_seconds. #}
+   cluster_name, delay_seconds, max_wait_seconds. #}
 <div class="form-grid">
   <div>
     <label class="field-label">Name</label>
     <input type="text" name="name" value="{{ cluster_name }}" placeholder="Homelab">
   </div>
+  <div></div>
   <div>
-    <label class="field-label">Pause between machines (seconds)</label>
+    <label class="field-label">Max. wait for each machine (seconds)</label>
+    <input type="number" name="max_wait_seconds" min="0" value="{{ max_wait_seconds }}" placeholder="300">
+  </div>
+  <div>
+    <label class="field-label">Then pause (seconds)</label>
     <input type="number" name="delay_seconds" min="0" value="{{ delay_seconds }}" placeholder="60">
   </div>
 </div>
+<p class="form-hint muted">The next machine only starts once the previous one is online (or off, when shutting down), at most the wait above. If it isn't by then, the cluster logs a warning and carries on. The pause follows, e.g. for services to finish starting. A wait of 0 skips the waiting and only pauses.</p>
 
 <label class="field-label">Members</label>
-<p class="form-hint muted">Give each machine in the cluster a position. They're woken in this order and shut down in reverse, with the pause above between them. Leave a field empty to keep that machine out.</p>
+<p class="form-hint muted">Give each machine in the cluster a position. They're woken in this order and shut down in reverse. Leave a field empty to keep that machine out.</p>
 <div class="member-list">
   {% for m in machines %}
   <label class="member-row">

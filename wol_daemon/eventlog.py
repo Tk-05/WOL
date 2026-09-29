@@ -13,7 +13,7 @@ class ActionRecord:
     machine_key: str  # or "cluster@<key>" for a cluster
     action: str  # "on" | "off"
     source: str  # "schedule" | "manual" | "watchdog" | "cluster:<key>"
-    result: str  # "ok" | "skipped" | "error" | "started" (clusters)
+    result: str  # "ok" | "skipped" | "error"; clusters also "started" | "cancelled"
     detail: str = ""
 
 

@@ -62,13 +62,16 @@ machines:
     schedule: []
 
 # Optional: clusters group machines so they're woken and shut down together, on their own
-# schedule. members are woken in the listed order and shut down in reverse, delay_seconds
-# apart (e.g. storage first on and last off). Cluster rules run in addition to each machine's
-# own rules.
+# schedule. members are woken in the listed order and shut down in reverse (e.g. storage
+# first on and last off). Each next machine starts once the previous one is up (or down),
+# waiting at most max_wait_seconds (then it carries on with a warning), plus delay_seconds.
+# max_wait_seconds: 0 turns the waiting off. Cluster rules run in addition to each
+# machine's own rules.
 clusters:
   - key: "homelab"
     name: "Homelab"
     members: ["pve", "desktop"]
+    max_wait_seconds: 300
     delay_seconds: 60
     schedule: []
 

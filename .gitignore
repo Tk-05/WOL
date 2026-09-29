@@ -1,4 +1,5 @@
 config.yaml
+auth.yaml
 backups/
 __pycache__/
 *.pyc

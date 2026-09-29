@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}Set a password — WOL Daemon{% endblock %}
+
+{% block header %}
+<header>
+  <h1>Set a password</h1>
+  <p>No login is set up yet. Choose the password for this WOL Daemon; you'll need it on every device you use it from.</p>
+</header>
+{% endblock %}
+
+{% block content %}
+<div class="card auth-card">
+  <form method="post" action="{{ url_for('setup') }}">
+    <label class="field-label" for="password">Password (at least {{ min_length }} characters)</label>
+    <input type="password" id="password" name="password" autocomplete="new-password" minlength="{{ min_length }}" required autofocus>
+    <label class="field-label" for="confirm" style="margin-top: 0.9rem;">Repeat password</label>
+    <input type="password" id="confirm" name="confirm" autocomplete="new-password" minlength="{{ min_length }}" required>
+    <div style="margin-top: 1rem;"><button type="submit" class="btn btn-primary">Set password</button></div>
+  </form>
+</div>
+{% endblock %}
