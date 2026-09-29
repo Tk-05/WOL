@@ -42,6 +42,9 @@
     <form class="inline" method="post" action="{{ url_for('machine_action', key=machine.key, action='off') }}">
       <button type="submit" class="btn btn-outline-danger" {{ 'disabled' if not machine.has_shutdown else '' }}>Shut down now</button>
     </form>
+    <form class="inline" method="post" action="{{ url_for('machine_action', key=machine.key, action='reboot') }}">
+      <button type="submit" class="btn btn-outline" {{ 'disabled' if not machine.has_shutdown else '' }}>Reboot now</button>
+    </form>
   </div>
   {% if not machine.has_shutdown %}
   <p class="form-hint muted">No shutdown method configured for this machine — wake-only.</p>

@@ -168,6 +168,12 @@ machine defined by `WOL_*` environment variables can't be edited in the UI
 while they're set. Each machine and cluster page also shows its own event log
 (wake-ups, shutdowns, failures, and changes to its settings and rules).
 
+**Reboot now**, next to wake/shutdown on a machine's page, needs the same
+shutdown method as shutting it down (Proxmox or SSH) and does nothing if the
+machine is already offline. For SSH it runs a separate `reboot_command`
+(defaults to `shutdown -r +1`, configurable next to the shutdown command),
+so it can differ from the shutdown one if needed.
+
 The event logs and each machine's/cluster's last action are saved to
 `events.jsonl` next to `config.yaml` (so in the `/config` volume), and survive
 restarts and image updates. Only the latest events are kept: 200 for the

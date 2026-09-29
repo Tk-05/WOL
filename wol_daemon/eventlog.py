@@ -22,7 +22,7 @@ STATE_HISTORY_LIMIT = 300
 class ActionRecord:
     timestamp: datetime
     machine_key: str  # or "cluster@<key>" for a cluster
-    action: str  # "on" | "off"
+    action: str  # "on" | "off" | "reboot"
     source: str  # "schedule" | "manual" | "watchdog" | "cluster:<key>"
     result: str  # "ok" | "skipped" | "error"; clusters also "started" | "cancelled"
     detail: str = ""

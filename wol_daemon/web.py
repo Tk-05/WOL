@@ -45,6 +45,8 @@ _ACTION_MESSAGES = {
     ("on", "skipped"): ("success", "'{name}' is already online"),
     ("off", "ok"): ("success", "Shutdown sent to '{name}'"),
     ("off", "skipped"): ("success", "'{name}' is already offline"),
+    ("reboot", "ok"): ("success", "Reboot sent to '{name}'"),
+    ("reboot", "skipped"): ("success", "'{name}' is offline, nothing to reboot"),
 }
 
 logger = logging.getLogger("wol_daemon")
@@ -73,6 +75,7 @@ def create_app(
     event_log: EventLog,
     wake: Callable[[Machine], None],
     shut_down: Callable[[Machine], None],
+    reboot: Callable[[Machine], None],
     run_cluster: Callable[[Cluster, str], None],
     rebuild_jobs: Callable[[], None],
 ) -> Flask:
@@ -581,6 +584,8 @@ def create_app(
             wake(machine)
         elif action == "off":
             shut_down(machine)
+        elif action == "reboot":
+            reboot(machine)
         flash_action_result(machine)
         return redirect_back(url_for("machine_detail", key=key))
 
@@ -1002,6 +1007,7 @@ def _machine_settings_from_form(
             username=form.get("ssh_username", "").strip() or "root",
             private_key_path=form.get("ssh_private_key_path", "").strip(),
             command=form.get("ssh_command", "").strip() or "shutdown -h +1",
+            reboot_command=form.get("ssh_reboot_command", "").strip() or "shutdown -r +1",
         )
     elif shutdown_type != "none":
         raise ConfigError(f"Invalid shutdown type: {shutdown_type}")
@@ -1016,6 +1022,7 @@ def _machine_form_values(machine: Machine | None) -> dict:
         "proxmox_host": "", "proxmox_node": "", "proxmox_token_id": "", "proxmox_verify_ssl": False,
         "has_secret": False,
         "ssh_host": "", "ssh_port": "", "ssh_username": "", "ssh_private_key_path": "", "ssh_command": "",
+        "ssh_reboot_command": "",
     }
     if machine is None:
         return values
@@ -1030,5 +1037,6 @@ def _machine_form_values(machine: Machine | None) -> dict:
         values.update(
             shutdown_type="ssh", ssh_host=shutdown.host, ssh_port=shutdown.port, ssh_username=shutdown.username,
             ssh_private_key_path=shutdown.private_key_path, ssh_command=shutdown.command,
+            ssh_reboot_command=shutdown.reboot_command,
         )
     return values

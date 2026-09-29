@@ -48,6 +48,7 @@ class SshShutdown:
     # A short delay (rather than an immediate shutdown) lets the ssh command return with a
     # clean exit status before the connection drops, instead of racing the shutdown itself.
     command: str = "shutdown -h +1"
+    reboot_command: str = "shutdown -r +1"
 
 
 @dataclass
@@ -147,6 +148,7 @@ def _parse_shutdown(data: dict | None, section: str) -> ProxmoxShutdown | SshShu
         username=data.get("username", "root"),
         private_key_path=data.get("private_key_path", ""),
         command=data.get("command", "shutdown -h +1"),
+        reboot_command=data.get("reboot_command", "shutdown -r +1"),
     )
 
 
@@ -438,6 +440,7 @@ def _shutdown_to_dict(shutdown: ProxmoxShutdown | SshShutdown | None) -> dict | 
         "username": shutdown.username,
         "private_key_path": shutdown.private_key_path,
         "command": shutdown.command,
+        "reboot_command": shutdown.reboot_command,
     }
 
 

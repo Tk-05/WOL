@@ -86,6 +86,35 @@ def turn_off(
     event_log.record_action(machine.key, "off", source, "ok")
 
 
+def reboot_machine(
+    config: AppConfig,
+    machine: Machine,
+    event_log: EventLog,
+    source: str = "manual",
+    log_owners: tuple[str, ...] = (),
+) -> None:
+    extra = {"owners": (machine.key, *log_owners)}
+    if not is_host_up(machine.ip_address, config.status_check.timeout_seconds):
+        logger.info("'%s' is offline, nothing to reboot", machine.name, extra=extra)
+        event_log.record_action(machine.key, "reboot", source, "skipped", "already offline")
+        return
+
+    if machine.shutdown is None:
+        logger.warning("'%s' has no shutdown method configured, cannot reboot it", machine.name, extra=extra)
+        event_log.record_action(machine.key, "reboot", source, "error", "no shutdown method configured")
+        return
+
+    logger.info("Rebooting '%s'", machine.name, extra=extra)
+    try:
+        _shutdown_client(machine.shutdown).reboot_node()
+    except (requests.RequestException, SshShutdownError) as exc:
+        logger.exception("Reboot failed for '%s'", machine.name, extra=extra)
+        event_log.record_action(machine.key, "reboot", source, "error", str(exc))
+        send_notification(config.notifications, f"Reboot failed for '{machine.name}' ({machine.ip_address}): {exc}")
+        return
+    event_log.record_action(machine.key, "reboot", source, "ok")
+
+
 def poll_status(config: AppConfig, machine: Machine, event_log: EventLog) -> None:
     """Runs every few minutes for every machine (see scheduler.STATUS_POLL_MINUTES), so the
     uptime bar reflects reality even when a machine is switched by hand, not just via this
@@ -211,6 +240,8 @@ def _run_sequence(
             detail = f"all {len(members)} machine(s) done after {elapsed}s"
         logger.info("Cluster '%s': %s", cluster.name, detail, extra={"owners": (cluster_owner,)})
         event_log.record_action(cluster_owner, action, source, "error" if problems else "ok", detail)
+        if problems:
+            send_notification(config.notifications, f"Cluster '{cluster.name}': {detail}")
     finally:
         with _sequences_lock:
             if _running_sequences.get(cluster.key) is cancel:
@@ -240,6 +271,9 @@ def on_rule_skipped(
         extra={"owners": (owner_key,)},
     )
     event_log.record_action(owner_key, rule.action, "schedule", "skipped", f"skipped by user ({rule.name})")
+    send_notification(
+        config.notifications, f"Skipped scheduled '{rule.action}' for '{owner.name}' (rule '{rule.name}')"
+    )
     save_config(config, config_path)
 
 
@@ -275,6 +309,7 @@ def main() -> None:
         event_log,
         wake=lambda m: turn_on(config, m, event_log, scheduler, "manual"),
         shut_down=lambda m: turn_off(config, m, event_log, "manual"),
+        reboot=lambda m: reboot_machine(config, m, event_log, "manual"),
         run_cluster=lambda c, action: cluster_action(config, c, action, event_log, scheduler, "manual"),
         rebuild_jobs=lambda: update_jobs(scheduler, config, **scheduled_callbacks),
     )

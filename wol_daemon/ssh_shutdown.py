@@ -17,6 +17,14 @@ class SshClient:
         self._config = config
 
     def shutdown_node(self) -> None:
+        self._run(self._config.command)
+        logger.info("Shutdown command sent to '%s' via SSH", self._config.host)
+
+    def reboot_node(self) -> None:
+        self._run(self._config.reboot_command)
+        logger.info("Reboot command sent to '%s' via SSH", self._config.host)
+
+    def _run(self, remote_command: str) -> None:
         cmd = [
             "ssh",
             "-o", "StrictHostKeyChecking=accept-new",
@@ -26,7 +34,7 @@ class SshClient:
         ]
         if self._config.private_key_path:
             cmd += ["-i", self._config.private_key_path]
-        cmd += [f"{self._config.username}@{self._config.host}", self._config.command]
+        cmd += [f"{self._config.username}@{self._config.host}", remote_command]
 
         try:
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
@@ -37,4 +45,3 @@ class SshClient:
 
         if result.returncode != 0:
             raise SshShutdownError(f"ssh exited with {result.returncode}: {result.stderr.strip()}")
-        logger.info("Shutdown command sent to '%s' via SSH", self._config.host)

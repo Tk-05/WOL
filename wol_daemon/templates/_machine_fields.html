@@ -70,9 +70,15 @@
         <input type="text" name="ssh_private_key_path" value="{{ form.ssh_private_key_path }}" placeholder="/config/ssh/desktop_key">
       </div>
     </div>
-    <div>
-      <label class="field-label">Shutdown command</label>
-      <input type="text" name="ssh_command" value="{{ form.ssh_command }}" placeholder="shutdown -h +1" style="width: 100%;">
+    <div class="form-grid">
+      <div>
+        <label class="field-label">Shutdown command</label>
+        <input type="text" name="ssh_command" value="{{ form.ssh_command }}" placeholder="shutdown -h +1">
+      </div>
+      <div>
+        <label class="field-label">Reboot command</label>
+        <input type="text" name="ssh_reboot_command" value="{{ form.ssh_reboot_command }}" placeholder="shutdown -r +1">
+      </div>
     </div>
   </div>
 </div>

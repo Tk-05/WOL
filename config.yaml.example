@@ -45,9 +45,10 @@ machines:
 
   # Example 2: a plain PC, shut down via SSH (key-based auth, no password). private_key_path
   # must point to a key file readable inside the container/host, e.g. mounted alongside
-  # config.yaml. command defaults to "shutdown -h +1" (Linux) — the 1-minute delay lets ssh
-  # return cleanly before the connection drops, instead of racing the shutdown itself. For
-  # Windows (with an SSH server enabled) use something like "shutdown /s /t 60" instead.
+  # config.yaml. command defaults to "shutdown -h +1" (Linux) and reboot_command to
+  # "shutdown -r +1" — the 1-minute delay lets ssh return cleanly before the connection drops,
+  # instead of racing the shutdown/reboot itself. For Windows (with an SSH server enabled) use
+  # something like "shutdown /s /t 60" and "shutdown /r /t 60" instead.
   - key: "desktop"
     name: "Desktop PC"
     mac_address: "11:22:33:44:55:66"
@@ -59,6 +60,7 @@ machines:
       username: "wol"
       private_key_path: "/config/ssh/desktop_key"
       command: "shutdown -h +1"
+      reboot_command: "shutdown -r +1"
     schedule: []
 
 # Optional: clusters group machines so they're woken and shut down together, on their own
@@ -88,8 +90,9 @@ wol:
   retry_interval_seconds: 60
   max_retries: 2
 
-# Optional: notification when WOL fails after all retries or a shutdown call fails, for any
-# machine. Omit the section or leave it empty to disable notifications.
+# Optional: notification on problems - WOL failing after all retries, a shutdown or reboot
+# call failing, a cluster sequence finishing with a problem member, or a scheduled action being
+# skipped (skip-next-time). Omit the section or leave it empty to disable notifications.
 notifications: {}
 #  ntfy:
 #    url: "https://ntfy.sh/my-wol-topic"
