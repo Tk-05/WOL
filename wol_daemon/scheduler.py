@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from typing import Callable
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.interval import IntervalTrigger
 
 from .config import AppConfig, Cluster, Machine, ScheduleRule
 
@@ -12,6 +13,11 @@ from .config import AppConfig, Cluster, Machine, ScheduleRule
 # can't contain "@" or ":", so the two kinds can never collide. One-off jobs (wake checks,
 # cluster steps) get APScheduler's random ids and are left alone when rules are rebuilt.
 RULE_MARKER = ":rule-"
+
+# Status-poll job ids look like "<machine-key>:poll-status"; kept separate from rule jobs so
+# rebuilding one kind never disturbs the other.
+POLL_MARKER = ":poll-status"
+STATUS_POLL_MINUTES = 5
 
 
 def machine_job_prefix(machine: Machine) -> str:
@@ -34,9 +40,10 @@ def build_scheduler(
     off_action: Callable[[Machine], None],
     on_cluster: Callable[[Cluster, str], None],
     on_skip: Callable[[Machine | Cluster, ScheduleRule], None],
+    on_poll: Callable[[Machine], None],
 ) -> BackgroundScheduler:
     scheduler = BackgroundScheduler()
-    update_jobs(scheduler, config, on_action, off_action, on_cluster, on_skip)
+    update_jobs(scheduler, config, on_action, off_action, on_cluster, on_skip, on_poll)
     return scheduler
 
 
@@ -47,15 +54,23 @@ def update_jobs(
     off_action: Callable[[Machine], None],
     on_cluster: Callable[[Cluster, str], None],
     on_skip: Callable[[Machine | Cluster, ScheduleRule], None],
+    on_poll: Callable[[Machine], None],
 ) -> None:
     for job in scheduler.get_jobs():
-        if RULE_MARKER in job.id:
+        if RULE_MARKER in job.id or POLL_MARKER in job.id:
             job.remove()
 
     for machine in config.machines:
         for index, rule in enumerate(machine.schedule):
             action = on_action if rule.action == "on" else off_action
             _add_rule_job(scheduler, machine_job_prefix(machine) + str(index), machine, rule, _bind(action, machine), on_skip)
+        scheduler.add_job(
+            _bind(on_poll, machine),
+            trigger=IntervalTrigger(minutes=STATUS_POLL_MINUTES),
+            id=f"{machine.key}{POLL_MARKER}",
+            name=f"Status poll for {machine.name}",
+            next_run_time=datetime.now(scheduler.timezone),  # first sample right away, not after 5 minutes
+        )
 
     for cluster in config.clusters:
         for index, rule in enumerate(cluster.schedule):

@@ -39,12 +39,14 @@ def _verify_wake(
     extra = {"owners": log_owners or (machine.key,)}
     if is_host_up(machine.ip_address, config.status_check.timeout_seconds):
         logger.info("'%s' reachable after wake attempt", machine.name, extra=extra)
+        event_log.record_state(machine.key, True)
         return
 
     if remaining_retries <= 0:
         message = f"WOL failed: '{machine.name}' ({machine.ip_address}) unreachable after multiple attempts"
         logger.error(message, extra=extra)
         event_log.record_action(machine.key, "on", "watchdog", "error", "unreachable after retries")
+        event_log.record_state(machine.key, False)
         send_notification(config.notifications, message)
         return
 

@@ -47,6 +47,9 @@
   <p class="form-hint muted">No shutdown method configured for this machine — wake-only.</p>
   {% endif %}
 
+  <div class="panel-heading">Uptime (last 24h)</div>
+  {% include "_uptime_bar.html" %}
+
   {% include "_owner_log.html" %}
 
   <details class="card-details">

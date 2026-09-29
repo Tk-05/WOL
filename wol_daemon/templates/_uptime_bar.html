@@ -1,0 +1,15 @@
+{# Uptime bar for the last 24h. Expects `uptime` = {bar: [{pct, up, title}], since: str|None}
+   (see web.uptime_view). Pass compact=true for a smaller version without axis labels, e.g. in
+   a cluster's member list. #}
+{% set compact = compact|default(false) %}
+<div class="uptime-bar{{ ' compact' if compact else '' }}">
+  {% for seg in uptime.bar %}
+  <div class="uptime-seg {{ 'up' if seg.up else ('down' if seg.up is not none else 'unknown') }}" style="width: {{ seg.pct }}%;" title="{{ seg.title }}"></div>
+  {% else %}
+  <div class="uptime-seg unknown" style="width: 100%;" title="No data yet"></div>
+  {% endfor %}
+</div>
+{% if not compact %}
+<div class="uptime-axis"><span>24h ago</span><span>12h ago</span><span>now</span></div>
+{% endif %}
+<p class="{{ 'form-hint muted' if not compact else 'uptime-since' }}">{{ uptime.since or ('No history yet — check back in a few minutes.' if not compact else 'No history yet') }}</p>

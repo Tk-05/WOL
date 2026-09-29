@@ -13,6 +13,10 @@ from threading import Lock
 # Rewrite the file down to what's actually kept after this many appended records.
 COMPACT_EVERY = 1000
 
+# State transitions kept per machine, for the uptime bar. Only actual changes are stored (see
+# record_state), so this covers many weeks even for a machine that flips several times a day.
+STATE_HISTORY_LIMIT = 300
+
 
 @dataclass
 class ActionRecord:
@@ -22,6 +26,14 @@ class ActionRecord:
     source: str  # "schedule" | "manual" | "watchdog" | "cluster:<key>"
     result: str  # "ok" | "skipped" | "error"; clusters also "started" | "cancelled"
     detail: str = ""
+
+
+@dataclass
+class StateSample:
+    """One observed change of a machine's reachability, oldest first in state_history_for."""
+
+    timestamp: datetime
+    up: bool
 
 
 @dataclass
@@ -35,6 +47,9 @@ class EventLog:
     """One global list for the overview, plus one per machine/cluster, and the last action of
     each. Log records are routed to owners via logging's extra={"owners": [...]}.
 
+    Also keeps, per machine, a short history of reachability changes (see record_state), used
+    for the uptime bar on its page.
+
     With a path, everything is also appended to a JSON-lines file and read back on start, so
     it survives restarts. The file is periodically rewritten to just what's kept in memory."""
 
@@ -44,6 +59,8 @@ class EventLog:
         self._owner_events: dict[str, deque[_Event]] = {}
         self._max_per_owner = max_per_owner
         self._last_actions: dict[str, ActionRecord] = {}
+        self._state_history: dict[str, deque[StateSample]] = {}
+        self._last_known_state: dict[str, bool] = {}
         self._seq = 0
         self._path = Path(path) if path is not None else None
         self._appended = 0
@@ -68,6 +85,25 @@ class EventLog:
     def last_action_for(self, machine_key: str) -> ActionRecord | None:
         with self._lock:
             return self._last_actions.get(machine_key)
+
+    def record_state(self, machine_key: str, up: bool) -> None:
+        """Called whenever a machine's reachability is freshly checked (the periodic status
+        poll, but also a confirmed wake or an already-on/off skip), so the uptime bar reflects
+        reality even when a machine is switched by hand. A no-op unless the state actually
+        changed, so polling often stays cheap."""
+        with self._lock:
+            if self._last_known_state.get(machine_key) == up:
+                return
+            self._last_known_state[machine_key] = up
+            sample = StateSample(datetime.now(), up)
+            self._state_history.setdefault(machine_key, deque(maxlen=STATE_HISTORY_LIMIT)).append(sample)
+            self._append(_state_to_dict(machine_key, sample))
+
+    def state_history_for(self, machine_key: str) -> list[StateSample]:
+        """Oldest first. Only the transitions themselves - assume the state holds between two
+        entries, and from the last one up to now."""
+        with self._lock:
+            return list(self._state_history.get(machine_key, ()))
 
     def recent_events(self, limit: int = 20) -> list[str]:
         with self._lock:
@@ -94,6 +130,8 @@ class EventLog:
     def _forget(self, owner: str) -> None:
         self._owner_events.pop(owner, None)
         self._last_actions.pop(owner, None)
+        self._state_history.pop(owner, None)
+        self._last_known_state.pop(owner, None)
         # Events shared with the overview or other owners stay, but must no longer point at
         # this owner, or a rewrite of the file would hand them to a new owner with this key.
         for event in self._all_events():
@@ -138,6 +176,11 @@ class EventLog:
                 elif kind == "action":
                     action = _action_from_dict(record)
                     self._last_actions[action.machine_key] = action
+                elif kind == "state":
+                    key = str(record["key"])
+                    sample = StateSample(datetime.fromisoformat(record["time"]), bool(record["up"]))
+                    self._state_history.setdefault(key, deque(maxlen=STATE_HISTORY_LIMIT)).append(sample)
+                    self._last_known_state[key] = sample.up
                 elif kind == "forget":
                     self._forget(record["owner"])
             except (ValueError, KeyError, TypeError, AttributeError):
@@ -148,6 +191,8 @@ class EventLog:
             return
         records = [_event_to_dict(e) for e in self._all_events()]
         records += [_action_to_dict(a) for a in self._last_actions.values()]
+        for key, samples in self._state_history.items():
+            records += [_state_to_dict(key, s) for s in samples]
         tmp = self._path.with_name(self._path.name + ".tmp")
         try:
             tmp.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in records), encoding="utf-8")
@@ -177,6 +222,10 @@ def _action_to_dict(record: ActionRecord) -> dict:
         "result": record.result,
         "detail": record.detail,
     }
+
+
+def _state_to_dict(machine_key: str, sample: StateSample) -> dict:
+    return {"type": "state", "key": machine_key, "time": sample.timestamp.isoformat(timespec="seconds"), "up": sample.up}
 
 
 def _action_from_dict(data: dict) -> ActionRecord:

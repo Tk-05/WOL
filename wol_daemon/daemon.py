@@ -48,6 +48,7 @@ def turn_on(
     if is_host_up(machine.ip_address, config.status_check.timeout_seconds):
         logger.info("'%s' is already reachable, no magic packet needed", machine.name, extra=extra)
         event_log.record_action(machine.key, "on", source, "skipped", "already online")
+        event_log.record_state(machine.key, True)
         return
     logger.info("Sending magic packet to '%s' (%s)", machine.name, machine.mac_address, extra=extra)
     send_magic_packet(machine.mac_address)
@@ -66,6 +67,7 @@ def turn_off(
     if not is_host_up(machine.ip_address, config.status_check.timeout_seconds):
         logger.info("'%s' is already offline, no shutdown needed", machine.name, extra=extra)
         event_log.record_action(machine.key, "off", source, "skipped", "already offline")
+        event_log.record_state(machine.key, False)
         return
 
     if machine.shutdown is None:
@@ -82,6 +84,14 @@ def turn_off(
         send_notification(config.notifications, f"Shutdown failed for '{machine.name}' ({machine.ip_address}): {exc}")
         return
     event_log.record_action(machine.key, "off", source, "ok")
+
+
+def poll_status(config: AppConfig, machine: Machine, event_log: EventLog) -> None:
+    """Runs every few minutes for every machine (see scheduler.STATUS_POLL_MINUTES), so the
+    uptime bar reflects reality even when a machine is switched by hand, not just via this
+    daemon's own wake/shutdown actions."""
+    up = is_host_up(machine.ip_address, config.status_check.timeout_seconds)
+    event_log.record_state(machine.key, up)
 
 
 def _shutdown_client(shutdown: ProxmoxShutdown | SshShutdown):
@@ -247,6 +257,7 @@ def main() -> None:
         "off_action": lambda m: turn_off(config, m, event_log, "schedule"),
         "on_cluster": lambda c, action: cluster_action(config, c, action, event_log, scheduler, "schedule"),
         "on_skip": lambda owner, rule: on_rule_skipped(owner, rule, config, config_path, event_log),
+        "on_poll": lambda m: poll_status(config, m, event_log),
     }
     scheduler = build_scheduler(config, **scheduled_callbacks)
     scheduler.start()

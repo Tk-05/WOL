@@ -4,7 +4,7 @@ import logging
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Callable
 from urllib.parse import urlsplit
@@ -287,6 +287,44 @@ def create_app(
             text += f": {record.detail}"
         return text
 
+    UPTIME_WINDOW = timedelta(hours=24)
+
+    def uptime_view(machine_key: str) -> dict:
+        """A simple 24h bar plus 'online/offline since', from the state transitions recorded
+        by the periodic status poll (see scheduler.STATUS_POLL_MINUTES) - not just from actions
+        this daemon took itself, so it also reflects a machine switched by hand. `bar` is a
+        list of {pct, up, title} segments (up is None where nothing was recorded yet, title a
+        hover tooltip with the exact times) that add up to 100%, oldest first."""
+        now = datetime.now()
+        window_start = now - UPTIME_WINDOW
+        history = event_log.state_history_for(machine_key)
+
+        state = None  # the state as of window_start, or None if there's no data that far back
+        for sample in history:
+            if sample.timestamp > window_start:
+                break
+            state = sample.up
+        points = [(window_start, state)]
+        for sample in history:
+            if window_start < sample.timestamp < now:
+                points.append((sample.timestamp, sample.up))
+
+        total_seconds = UPTIME_WINDOW.total_seconds()
+        bar = []
+        for i, (start, up) in enumerate(points):
+            end = points[i + 1][0] if i + 1 < len(points) else now
+            pct = (end - start).total_seconds() / total_seconds * 100
+            if pct > 0.05:  # drop slivers too thin to render
+                label = "Online" if up else "Offline" if up is not None else "No data"
+                title = f"{label}: {start:%d %b %H:%M} – {end:%d %b %H:%M} ({_format_duration(end - start)})"
+                bar.append({"pct": round(pct, 2), "up": up, "title": title})
+
+        if not history:
+            return {"bar": bar, "since": None}
+        last = history[-1]
+        since = f"{'Online' if last.up else 'Offline'} since {last.timestamp:%d %b %H:%M}"
+        return {"bar": bar, "since": since}
+
     def machine_summary(machine: Machine, host_up: bool) -> dict:
         return {
             "key": machine.key,
@@ -307,7 +345,10 @@ def create_app(
             "name": cluster.name,
             "delay_seconds": cluster.delay_seconds,
             "max_wait_seconds": cluster.max_wait_seconds,
-            "members": [{"key": m.key, "name": m.name, "host_up": status.get(m.key, False)} for m in members],
+            "members": [
+                {"key": m.key, "name": m.name, "host_up": status.get(m.key, False), "uptime": uptime_view(m.key)}
+                for m in members
+            ],
             "online": sum(1 for m in members if status.get(m.key)),
             "last_action": last_action_str(owner_event_key(cluster)),
             "next_action": next_action_info(cluster_job_prefix(cluster), cluster.schedule),
@@ -481,6 +522,7 @@ def create_app(
             form=_machine_form_values(machine),
             env_locked=is_env_machine(machine),
             owner_events=event_log.recent_events_for(machine.key),
+            uptime=uptime_view(machine.key),
             token_url=url_for("machine_token", key=key) if isinstance(machine.shutdown, ProxmoxShutdown) else None,
         )
 
@@ -827,6 +869,14 @@ def create_app(
         return redirect(url_for("config_page"))
 
     return app
+
+
+def _format_duration(delta: timedelta) -> str:
+    minutes = int(delta.total_seconds() // 60)
+    hours, minutes = divmod(minutes, 60)
+    if hours and minutes:
+        return f"{hours}h {minutes}m"
+    return f"{hours}h" if hours else f"{minutes}m"
 
 
 def _shutdown_method(machine: Machine) -> str:

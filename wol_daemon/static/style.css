@@ -233,6 +233,14 @@ input[type="text"]:focus, input[type="password"]:focus, input[type="time"]:focus
 .card-details { margin-top: 1rem; }
 .panel-heading { font-size: 0.72rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); margin: 1.4rem 0 0.4rem; }
 .log-sm { max-height: 180px; font-size: 0.74rem; }
+.uptime-bar { display: flex; gap: 2px; height: 14px; border-radius: 4px; overflow: hidden; background: var(--border); }
+.uptime-bar.compact { height: 8px; margin: 0.35rem 0 0.15rem; }
+.uptime-seg { height: 100%; min-width: 2px; cursor: help; }
+.uptime-seg.up { background: #22c55e; }
+.uptime-seg.down { background: var(--danger); }
+.uptime-seg.unknown { background: repeating-linear-gradient(135deg, var(--border), var(--border) 4px, var(--surface) 4px, var(--surface) 8px); }
+.uptime-axis { display: flex; justify-content: space-between; font-size: 0.68rem; color: var(--text-muted); margin-top: 0.25rem; }
+.uptime-since { font-size: 0.76rem; color: var(--text-muted); margin: 0 0 0.5rem; }
 .secret-row { display: flex; gap: 0.4rem; align-items: center; }
 .secret-row input { flex: 1; min-width: 0; }
 .edit-panel .form-hint:first-child { margin-top: 0; }
@@ -245,7 +253,7 @@ code { font-family: ui-monospace, "SF Mono", Consolas, monospace; font-size: 0.8
 .member-row input[type="number"] { width: 4.5rem; }
 
 .cluster-members { margin: 0 0 1.1rem; padding-left: 1.4rem; font-size: 0.92rem; }
-.cluster-members li { margin-bottom: 0.25rem; }
+.cluster-members li { margin-bottom: 0.7rem; }
 .cluster-members li .status-dot { display: inline-block; margin-right: 0.45rem; vertical-align: middle; }
 .cluster-members a { color: inherit; }
 

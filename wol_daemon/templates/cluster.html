@@ -24,8 +24,18 @@
   <ol class="cluster-members">
     {% for m in cluster.members %}
     <li>
-      <span class="status-dot {{ 'up' if m.host_up else 'down' }}"></span>
-      <a href="{{ url_for('machine_detail', key=m.key) }}">{{ m.name }}</a>
+      <div>
+        <span class="status-dot {{ 'up' if m.host_up else 'down' }}"></span>
+        <a href="{{ url_for('machine_detail', key=m.key) }}">{{ m.name }}</a>
+      </div>
+      <div class="uptime-bar compact">
+        {% for seg in m.uptime.bar %}
+        <div class="uptime-seg {{ 'up' if seg.up else ('down' if seg.up is not none else 'unknown') }}" style="width: {{ seg.pct }}%;" title="{{ seg.title }}"></div>
+        {% else %}
+        <div class="uptime-seg unknown" style="width: 100%;" title="No data yet"></div>
+        {% endfor %}
+      </div>
+      <p class="uptime-since">{{ m.uptime.since or 'No history yet' }}</p>
     </li>
     {% else %}
     <li class="muted">No members — add some under "Edit cluster" below.</li>

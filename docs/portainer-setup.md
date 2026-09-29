@@ -177,6 +177,13 @@ start it again. Deleting a machine or cluster also deletes its log. If the file
 can't be written (e.g. a read-only volume), the daemon keeps running with the
 logs in memory only.
 
+Each machine page also shows a small uptime bar for the last 24 hours plus
+"online/offline since". It's fed by a background check every 5 minutes (so it
+also catches a machine being switched by hand, not just wake-ups and shutdowns
+done through the daemon) and saved the same way as the event log, so it
+survives restarts too. A freshly added machine shows "No history yet" until
+its first check has run.
+
 For a plain PC shut down over SSH, the private key file needs to be readable
 inside the container. Put it in the same volume as `config.yaml` — e.g. bind
 mount a host directory to `/config` and place the key at
