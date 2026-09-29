@@ -5,6 +5,7 @@ __pycache__/
 config.yaml
 config.yaml.test
 auth.yaml
+events.jsonl*
 backups/
 systemd/
 .git/

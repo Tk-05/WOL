@@ -236,7 +236,7 @@ def on_rule_skipped(
 def main() -> None:
     config_path = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(__file__).resolve().parent.parent / "config.yaml"
     config = load_config(config_path)
-    event_log = EventLog()
+    event_log = EventLog(path=config_path.parent / "events.jsonl")
 
     event_handler = EventLogHandler(event_log)
     event_handler.setFormatter(logging.Formatter("%(message)s"))

@@ -61,7 +61,8 @@ addresses.
 ```
 
 - `shutdown_method`: `proxmox`, `ssh` or `none` (wake-only).
-- `last_action`: `null` until something happened since the daemon started.
+- `last_action`: `null` until the machine was woken or shut down for the first
+  time (it's saved, so it survives restarts).
   `source` is `schedule`, `manual`, `watchdog` or `cluster:<key>`; `result` is `ok`,
   `skipped` (e.g. already online) or `error` (reason in `detail`). For clusters it's
   `started` while a sequence runs, then `ok`, `error` (a member didn't come up/go

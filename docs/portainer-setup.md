@@ -166,8 +166,16 @@ running actions; no restart needed. When editing a Proxmox machine, leave the
 token secret empty to keep the current one, or use **Show** to display it. The
 machine defined by `WOL_*` environment variables can't be edited in the UI
 while they're set. Each machine and cluster page also shows its own event log
-(wake-ups, shutdowns, failures, and changes to its settings and rules), kept in
-memory since the daemon last started.
+(wake-ups, shutdowns, failures, and changes to its settings and rules).
+
+The event logs and each machine's/cluster's last action are saved to
+`events.jsonl` next to `config.yaml` (so in the `/config` volume), and survive
+restarts and image updates. Only the latest events are kept: 200 for the
+overview and 50 per machine and cluster; older ones are dropped from the file
+automatically. To clear all logs, stop the stack, delete `events.jsonl` and
+start it again. Deleting a machine or cluster also deletes its log. If the file
+can't be written (e.g. a read-only volume), the daemon keeps running with the
+logs in memory only.
 
 For a plain PC shut down over SSH, the private key file needs to be readable
 inside the container. Put it in the same volume as `config.yaml` — e.g. bind
