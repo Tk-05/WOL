@@ -4,7 +4,7 @@
 {% block header %}
 <header>
   <h1>Settings</h1>
-  <p>Login, API access, and backing up or moving the configuration.</p>
+  <p>Login, API access, notifications, and backing up or moving the configuration.</p>
 </header>
 {% endblock %}
 
@@ -58,6 +58,110 @@
   <form method="post" action="{{ url_for('settings_api_key') }}">
     <button type="submit" class="btn btn-primary">Generate API key</button>
   </form>
+  {% endif %}
+</div>
+
+<h2>General settings</h2>
+<div class="card">
+  {% if env_active %}
+  <p class="card-text muted">These come from WOL_* environment variables on this node
+    (WOL_STATUS_TIMEOUT_SECONDS, WOL_VERIFY_AFTER_SECONDS, WOL_RETRY_INTERVAL_SECONDS,
+    WOL_MAX_RETRIES, WOL_NTFY_URL, WOL_TELEGRAM_BOT_TOKEN, WOL_TELEGRAM_CHAT_ID) and can't be
+    changed here.</p>
+  <dl class="meta-grid">
+    <div><dt>Status check timeout</dt><dd>{{ general.status_timeout }}s</dd></div>
+    <div><dt>Wake verification</dt><dd>after {{ general.wol_verify_after }}s, retry every {{ general.wol_retry_interval }}s, {{ general.wol_max_retries }}x</dd></div>
+    <div><dt>ntfy</dt><dd>{{ general.ntfy_url or 'not set' }}</dd></div>
+    <div><dt>Telegram</dt><dd>{{ 'configured' if general.has_telegram_token else 'not set' }}</dd></div>
+  </dl>
+  {% else %}
+  <form method="post" action="{{ url_for('settings_general') }}">
+    <p class="panel-heading" style="margin-top: 0;">Status check</p>
+    <div class="form-grid">
+      <div>
+        <label class="field-label">Ping timeout (seconds)</label>
+        <input type="number" name="status_timeout" value="{{ general.status_timeout }}" min="1">
+      </div>
+    </div>
+
+    <p class="panel-heading">Wake verification</p>
+    <p class="form-hint muted" style="margin-top: -0.3rem;">After sending a magic packet, how long to wait before checking it worked, and how often to retry.</p>
+    <div class="form-grid">
+      <div>
+        <label class="field-label">Verify after (seconds)</label>
+        <input type="number" name="wol_verify_after" value="{{ general.wol_verify_after }}" min="0">
+      </div>
+      <div>
+        <label class="field-label">Retry interval (seconds)</label>
+        <input type="number" name="wol_retry_interval" value="{{ general.wol_retry_interval }}" min="0">
+      </div>
+      <div>
+        <label class="field-label">Max retries</label>
+        <input type="number" name="wol_max_retries" value="{{ general.wol_max_retries }}" min="0">
+      </div>
+    </div>
+
+    <p class="panel-heading">Notifications</p>
+    <p class="form-hint muted" style="margin-top: -0.3rem;">Sent on wake/shutdown/reboot failures, a cluster sequence ending with a problem, and skipped scheduled actions. Leave both empty to disable a channel.</p>
+    <div class="form-grid">
+      <div>
+        <label class="field-label">ntfy topic URL</label>
+        <input type="text" name="ntfy_url" value="{{ general.ntfy_url }}" placeholder="https://ntfy.sh/my-wol-topic">
+      </div>
+      <div>
+        <label class="field-label">Telegram chat ID</label>
+        <input type="text" name="telegram_chat_id" value="{{ general.telegram_chat_id }}" placeholder="123456789">
+      </div>
+      <div>
+        <label class="field-label">Telegram bot token</label>
+        <div class="secret-row">
+          <input type="password" name="telegram_bot_token" id="telegram-token-secret" autocomplete="off"
+                 placeholder="{{ 'unchanged – leave empty to keep' if general.has_telegram_token else '123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11' }}">
+          {% if general.has_telegram_token %}
+          <button type="button" class="btn btn-outline btn-sm" id="telegram-token-reveal" data-url="{{ url_for('settings_telegram_token') }}">Show</button>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+
+    <div style="margin-top: 1rem;"><button type="submit" class="btn btn-primary btn-sm">Save settings</button></div>
+  </form>
+  {% if general.has_telegram_token %}
+  <script>
+    (function () {
+      var button = document.getElementById("telegram-token-reveal");
+      var input = document.getElementById("telegram-token-secret");
+      function show() {
+        input.type = "text";
+        button.textContent = "Hide";
+      }
+      button.addEventListener("click", function () {
+        if (input.type === "text") {
+          input.type = "password";
+          button.textContent = "Show";
+          return;
+        }
+        if (input.value) {
+          show();
+          return;
+        }
+        fetch(button.dataset.url, { cache: "no-store" })
+          .then(function (response) {
+            if (!response.ok) throw new Error(response.status);
+            return response.json();
+          })
+          .then(function (data) {
+            input.value = data.bot_token;
+            show();
+          })
+          .catch(function () {
+            button.textContent = "Unavailable";
+            button.disabled = true;
+          });
+      });
+    })();
+  </script>
+  {% endif %}
   {% endif %}
 </div>
 

@@ -216,6 +216,22 @@ A cluster has its own schedule, which runs in addition to each member's own
 rules. Deleting a machine removes it from its clusters; deleting a cluster
 keeps its machines.
 
+## General settings
+
+**Settings** in the top navigation also has a "General settings" card for the
+options that aren't per machine or cluster: how long a ping may take before a
+machine counts as offline, how long to wait after a wake-up before checking it
+worked (and how often to retry), and ntfy/Telegram notifications. Notifications
+fire on a failed wake/shutdown/reboot, a cluster sequence ending with a problem
+member, and a skipped scheduled action; leave both the ntfy URL and the
+Telegram fields empty to turn a channel off. The Telegram bot token is never
+shown on the page itself, only via its own **Show** button, the same as a
+Proxmox token secret. If `WOL_*` environment variables are set on this node,
+this card is locked (it shows the current values but can't be edited), since
+they're rebuilt from the environment on every start - see `WOL_STATUS_TIMEOUT_SECONDS`,
+`WOL_VERIFY_AFTER_SECONDS`, `WOL_RETRY_INTERVAL_SECONDS`, `WOL_MAX_RETRIES`,
+`WOL_NTFY_URL`, `WOL_TELEGRAM_BOT_TOKEN` and `WOL_TELEGRAM_CHAT_ID`.
+
 ## Status for other services
 
 Home Assistant, Uptime Kuma and similar can read the status of every machine and

@@ -20,11 +20,16 @@ from .config import (
     ENV_MACHINE_KEY,
     KEY_RE,
     Machine,
+    NotificationConfig,
+    NtfyConfig,
     ProxmoxShutdown,
     ScheduleRule,
     SshShutdown,
+    StatusCheckConfig,
+    TelegramConfig,
     VALID_ACTIONS,
     VALID_DAYS,
+    WolConfig,
     config_to_yaml,
     env_config_active,
     load_config,
@@ -750,6 +755,7 @@ def create_app(
             has_api_key=auth.has_api_key,
             api_key_created=auth.api_key_created,
             new_api_key=new_api_key,
+            general=_general_settings_values(config),
         )
 
     @app.route("/config")
@@ -791,6 +797,34 @@ def create_app(
         _log(None, "API key revoked")
         flash("API key revoked. The status API now only answers logged-in browsers.", "success")
         return redirect(url_for("config_page"))
+
+    @app.post("/settings/general")
+    def settings_general():
+        if env_config_active():
+            flash("These settings come from WOL_* environment variables and can't be changed here", "error")
+            return redirect(url_for("config_page"))
+        try:
+            status_check, wol, notifications = _general_settings_from_form(request.form, config.notifications)
+        except ConfigError as exc:
+            flash(str(exc), "error")
+            return redirect(url_for("config_page"))
+        config.status_check = status_check
+        config.wol = wol
+        config.notifications = notifications
+        save_config(config, config_path)
+        _log(None, "General settings changed")
+        flash("Settings saved", "success")
+        return redirect(url_for("config_page"))
+
+    @app.route("/settings/telegram-token")
+    def settings_telegram_token():
+        """The Telegram bot token is only ever sent on explicit request ('Show' button),
+        never embedded in the page - same reasoning as the Proxmox token secret."""
+        if config.notifications.telegram is None:
+            abort(404)
+        response = jsonify(bot_token=config.notifications.telegram.bot_token)
+        response.headers["Cache-Control"] = "no-store"
+        return response
 
     @app.route("/config/export")
     def config_export():
@@ -928,6 +962,59 @@ def _seconds_field(form, name: str, default: int, label: str) -> int:
     if value < 0:
         raise ConfigError(f"{label} can't be negative")
     return value
+
+
+def _int_field(form, name: str, default: int, label: str) -> int:
+    raw = form.get(name, "").strip()
+    try:
+        value = int(raw) if raw else default
+    except ValueError:
+        raise ConfigError(f"{label} must be a whole number")
+    if value < 0:
+        raise ConfigError(f"{label} can't be negative")
+    return value
+
+
+def _general_settings_values(config: AppConfig) -> dict:
+    """Prefill values for the general settings form on the Settings page."""
+    return {
+        "status_timeout": config.status_check.timeout_seconds,
+        "wol_verify_after": config.wol.verify_after_seconds,
+        "wol_retry_interval": config.wol.retry_interval_seconds,
+        "wol_max_retries": config.wol.max_retries,
+        "ntfy_url": config.notifications.ntfy.url if config.notifications.ntfy else "",
+        "telegram_chat_id": config.notifications.telegram.chat_id if config.notifications.telegram else "",
+        "has_telegram_token": config.notifications.telegram is not None,
+    }
+
+
+def _general_settings_from_form(
+    form, previous_notifications: NotificationConfig
+) -> tuple[StatusCheckConfig, WolConfig, NotificationConfig]:
+    """The Telegram bot token is never sent to the browser, so an empty field while one is
+    already set means 'keep the current one' - same as the Proxmox token secret."""
+    status_check = StatusCheckConfig(timeout_seconds=_seconds_field(form, "status_timeout", 5, "Status check timeout"))
+    wol = WolConfig(
+        verify_after_seconds=_seconds_field(form, "wol_verify_after", 120, "Verify after"),
+        retry_interval_seconds=_seconds_field(form, "wol_retry_interval", 60, "Retry interval"),
+        max_retries=_int_field(form, "wol_max_retries", 2, "Max retries"),
+    )
+
+    ntfy_url = form.get("ntfy_url", "").strip()
+    ntfy = NtfyConfig(url=ntfy_url) if ntfy_url else None
+
+    chat_id = form.get("telegram_chat_id", "").strip()
+    bot_token = form.get("telegram_bot_token", "").strip()
+    # Only keep the previous token when the chat ID is still set too - an empty chat ID means
+    # "disable Telegram", and the token field is always empty in the page, so it can't itself
+    # signal "clear it".
+    if chat_id and not bot_token and previous_notifications.telegram is not None:
+        bot_token = previous_notifications.telegram.bot_token
+    if bool(bot_token) != bool(chat_id):
+        raise ConfigError("Telegram bot token and chat ID must be set together")
+    telegram = TelegramConfig(bot_token=bot_token, chat_id=chat_id) if bot_token else None
+
+    return status_check, wol, NotificationConfig(ntfy=ntfy, telegram=telegram)
 
 
 def _cluster_members_from_form(form, machines: list[Machine]) -> tuple[list[str], int, int]:
