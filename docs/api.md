@@ -12,6 +12,8 @@ query the status of machines and clusters, and, with a control key, switch them.
 | `GET /api/clusters/<key>` | one cluster |
 | `POST /api/machines/<key>/action/<on\|off\|reboot>` | wakes, shuts down or reboots a machine, see [Actions](#actions) |
 | `POST /api/clusters/<key>/action/<on\|off>` | starts a cluster's wake or shutdown sequence |
+| `POST`/`DELETE /api/machines/<key>/skip-next` | skips the machine's next scheduled run, or takes that back, see [Skipping the next run](#skipping-the-next-run) |
+| `POST`/`DELETE /api/clusters/<key>/skip-next` | the same for a cluster |
 | `GET /api/events` | a stream of change notifications, see [Events](#events) |
 
 An unknown key returns HTTP 404 with `{"error": "..."}`.
@@ -104,6 +106,27 @@ can take minutes, so it answers at once with HTTP 202 and the cluster's `last_ac
 ```sh
 curl -X POST -H "Authorization: Bearer <key>" http://<pi-ip>:9090/api/machines/pve/action/on
 ```
+
+## Skipping the next run
+
+`POST /api/machines/<key>/skip-next` (or `/api/clusters/<key>/skip-next`) skips the
+next scheduled run, whichever rule it belongs to: the run that `next_action` shows. It's
+the same as **Skip next** on that rule in the web UI, so the rule's later runs happen as
+usual. `DELETE` on the same path takes the skip back. Both need a control key, are
+idempotent and answer with the updated `next_action`:
+
+```json
+{
+  "rule": "Weekdays off",
+  "action": "off",
+  "time": "2026-09-28T23:00:00+02:00",
+  "will_be_skipped": true
+}
+```
+
+Once the skipped run's time has passed, `next_action` moves on to the following run
+(with `will_be_skipped: false`). Without any upcoming run (no schedule rules) the answer
+is HTTP 409.
 
 ## Events
 

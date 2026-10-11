@@ -17,9 +17,13 @@ from wol_daemon.config import (
 )
 from wol_daemon.eventlog import EventLog
 from wol_daemon.events import EventBus
-from wol_daemon.scheduler import owner_event_key
+from wol_daemon.scheduler import owner_event_key, update_jobs
 
 PASSWORD = "correct horse"
+
+_NO_CALLBACKS = {
+    name: (lambda *args: None) for name in ("on_action", "off_action", "on_cluster", "on_skip", "on_poll")
+}
 INSTANCE_ID = "0123456789abcdef0123456789abcdef"
 
 
@@ -51,7 +55,16 @@ def events() -> EventBus:
 
 
 @pytest.fixture
-def app(tmp_path, monkeypatch, calls, online, events):
+def scheduler():
+    """Real but paused: jobs get their next run times, but nothing ever fires."""
+    scheduler = BackgroundScheduler()
+    scheduler.start(paused=True)
+    yield scheduler
+    scheduler.shutdown(wait=False)
+
+
+@pytest.fixture
+def app(tmp_path, monkeypatch, calls, online, events, scheduler):
     for name in ("WOL_PROXMOX_HOST", "WOL_TARGET_MAC", "WOL_TARGET_IP"):
         monkeypatch.delenv(name, raising=False)
     config = AppConfig(
@@ -86,13 +99,13 @@ def app(tmp_path, monkeypatch, calls, online, events):
     app = web.create_app(
         tmp_path / "config.yaml",
         config,
-        BackgroundScheduler(),
+        scheduler,
         event_log,
         wake=machine_action("on"),
         shut_down=machine_action("off"),
         reboot=machine_action("reboot"),
         run_cluster=run_cluster,
-        rebuild_jobs=lambda: None,
+        rebuild_jobs=lambda: update_jobs(scheduler, config, **_NO_CALLBACKS),
         events=events,
         instance_id=INSTANCE_ID,
     )
