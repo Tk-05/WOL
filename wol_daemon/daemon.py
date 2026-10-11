@@ -307,10 +307,10 @@ def main() -> None:
         config,
         scheduler,
         event_log,
-        wake=lambda m: turn_on(config, m, event_log, scheduler, "manual"),
-        shut_down=lambda m: turn_off(config, m, event_log, "manual"),
-        reboot=lambda m: reboot_machine(config, m, event_log, "manual"),
-        run_cluster=lambda c, action: cluster_action(config, c, action, event_log, scheduler, "manual"),
+        wake=lambda m, source: turn_on(config, m, event_log, scheduler, source),
+        shut_down=lambda m, source: turn_off(config, m, event_log, source),
+        reboot=lambda m, source: reboot_machine(config, m, event_log, source),
+        run_cluster=lambda c, action, source: cluster_action(config, c, action, event_log, scheduler, source),
         rebuild_jobs=lambda: update_jobs(scheduler, config, **scheduled_callbacks),
     )
 

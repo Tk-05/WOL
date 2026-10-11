@@ -11,3 +11,8 @@ systemd/
 .git/
 .gitignore
 _smoketest*.py
+tests/
+requirements-dev.txt
+pytest.ini
+.pytest_cache/
+instance_id

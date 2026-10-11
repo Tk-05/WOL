@@ -11,7 +11,7 @@
 {% block content %}
 {% if new_api_key %}
 <div class="card key-card">
-  <p class="card-text"><strong>Your new API key.</strong> Copy it now: it's only stored as a hash and can't be shown again.</p>
+  <p class="card-text"><strong>Your new API key '{{ new_api_key_name }}'.</strong> Copy it now: it's only stored as a hash and can't be shown again.</p>
   <code class="api-key">{{ new_api_key }}</code>
   <p class="card-text muted">Send it with every API request as the header <code>Authorization: Bearer &lt;key&gt;</code>. Examples for Home Assistant and Uptime Kuma are in docs/api.md.</p>
 </div>
@@ -40,25 +40,50 @@
   </form>
 </div>
 
-<h2>API key</h2>
+<h2>API keys</h2>
+<p class="form-hint muted">For Home Assistant, Uptime Kuma, scripts and the like (see docs/api.md). Give each service its own key, so you can revoke one without touching the others.
+  <strong>Read only</strong> keys can only query the status; <strong>Control</strong> keys can also wake, shut down and reboot machines and clusters.</p>
+<div class="table-wrap">
+  <table>
+    <thead><tr><th>Name</th><th>Access</th><th class="hide-narrow">Created</th><th></th></tr></thead>
+    <tbody>
+      {% for key in api_keys %}
+      <tr>
+        <td>{{ key.name }}</td>
+        <td><span class="badge {{ 'on' if key.can_control else 'off' }}">{{ scope_labels[key.scope] }}</span></td>
+        <td class="muted hide-narrow">{{ key.created[:16]|replace('T', ' ') if key.created else 'unknown' }}</td>
+        <td>
+          <form class="inline" method="post" action="{{ url_for('settings_api_key_delete', key_id=key.id) }}" onsubmit="return confirm('Revoke this API key? Services using it stop working.')">
+            <button type="submit" class="btn btn-outline-danger btn-sm">Revoke</button>
+          </form>
+        </td>
+      </tr>
+      {% else %}
+      <tr><td colspan="4"><small class="muted">No keys yet, so the API only answers browsers that are logged in.</small></td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<h2>New API key</h2>
 <div class="card">
-  <p class="card-text">The status API (<code>/api/machines</code>, <code>/api/clusters</code>) for Home Assistant, Uptime Kuma and the like needs this key.</p>
-  {% if has_api_key %}
-  <p class="card-text muted">A key exists{% if api_key_created %}, created {{ api_key_created }}{% endif %}. Generating a new one replaces it, so update it wherever it's in use.</p>
-  <div class="actions-row">
-    <form class="inline" method="post" action="{{ url_for('settings_api_key') }}" onsubmit="return confirm('Replace the API key? Services still using the old one stop working.')">
-      <button type="submit" class="btn btn-outline">Generate new key</button>
-    </form>
-    <form class="inline" method="post" action="{{ url_for('settings_api_key_delete') }}" onsubmit="return confirm('Revoke the API key? Services using it stop working.')">
-      <button type="submit" class="btn btn-outline-danger">Revoke key</button>
-    </form>
-  </div>
-  {% else %}
-  <p class="card-text muted">No key yet, so the API only answers browsers that are logged in.</p>
   <form method="post" action="{{ url_for('settings_api_key') }}">
-    <button type="submit" class="btn btn-primary">Generate API key</button>
+    <div class="form-grid">
+      <div>
+        <label class="field-label" for="key-name">Name</label>
+        <input type="text" id="key-name" name="name" maxlength="{{ max_key_name }}" placeholder="e.g. Home Assistant" required>
+      </div>
+      <div>
+        <label class="field-label" for="key-scope">Access</label>
+        <select id="key-scope" name="scope">
+          {% for scope, label in scope_labels.items() %}
+          <option value="{{ scope }}">{{ label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+    </div>
+    <button type="submit" class="btn btn-primary">Create API key</button>
   </form>
-  {% endif %}
 </div>
 
 <h2>General settings</h2>
