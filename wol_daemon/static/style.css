@@ -170,7 +170,7 @@ table { width: 100%; border-collapse: collapse; }
 th { text-align: left; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); font-weight: 600; padding: 0.7rem 1rem; border-bottom: 1px solid var(--border); }
 td { padding: 0.7rem 1rem; border-bottom: 1px solid var(--border); font-size: 0.9rem; vertical-align: top; }
 tbody tr:last-child td { border-bottom: none; }
-.badge { display: inline-block; padding: 0.1rem 0.55rem; border-radius: 999px; font-size: 0.76rem; font-weight: 600; }
+.badge { display: inline-block; padding: 0.1rem 0.55rem; border-radius: 999px; font-size: 0.76rem; font-weight: 600; white-space: nowrap; }
 .badge.on { background: var(--success-bg); color: var(--success-text); }
 .badge.off { background: var(--chip-bg); color: var(--text-muted); }
 
@@ -263,6 +263,7 @@ code { font-family: ui-monospace, "SF Mono", Consolas, monospace; font-size: 0.8
 .form-grid > div { display: flex; flex-direction: column; }
 .form-grid input[type="text"], .form-grid input[type="number"], .form-grid input[type="password"] { width: 100%; }
 @media (max-width: 520px) { .form-grid { grid-template-columns: 1fr; } }
+@media (max-width: 520px) { .hide-narrow { display: none; } }
 
 .checkbox-row { display: flex; align-items: center; gap: 0.4rem; font-size: 0.88rem; margin-top: 0.3rem; }
 .checkbox-row input { width: auto; }

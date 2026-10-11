@@ -120,7 +120,7 @@ docker exec wol-daemon rm /config/auth.yaml
 docker restart wol-daemon
 ```
 
-This also revokes the API key.
+This also revokes all API keys.
 
 ## Timezone
 
@@ -236,7 +236,8 @@ they're rebuilt from the environment on every start - see `WOL_STATUS_TIMEOUT_SE
 
 Home Assistant, Uptime Kuma and similar can read the status of every machine and
 cluster as JSON, e.g. `http://<host>:9090/api/machines/<key>`, with an API key
-from **Settings**. See [api.md](api.md).
+from **Settings**; a key with **Control** access can also wake, shut down and reboot
+them. See [api.md](api.md).
 
 ## Export and import
 

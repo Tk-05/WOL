@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import re
 import time
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -10,9 +11,9 @@ from typing import Callable
 from urllib.parse import urlsplit
 
 from apscheduler.schedulers.background import BackgroundScheduler
-from flask import Flask, Response, abort, flash, jsonify, redirect, render_template, request, session, url_for
+from flask import Flask, Response, abort, flash, g, jsonify, redirect, render_template, request, session, url_for
 
-from .auth import MIN_PASSWORD_LENGTH, AuthStore
+from .auth import MAX_API_KEY_NAME_LENGTH, MIN_PASSWORD_LENGTH, ApiKey, AuthStore
 from .config import (
     AppConfig,
     Cluster,
@@ -69,6 +70,9 @@ def _safe_local_path(target: str | None) -> str | None:
     return None
 
 
+_ACTION_NOUNS = {"on": "wake-up", "off": "shutdown", "reboot": "reboot"}
+_SCOPE_LABELS = {"read": "Read only", "control": "Control"}
+
 # Reachable without logging in. Everything under /api uses the API key instead.
 _PUBLIC_ENDPOINTS = {"static", "login", "setup", "healthz"}
 
@@ -78,14 +82,16 @@ def create_app(
     config: AppConfig,
     scheduler: BackgroundScheduler,
     event_log: EventLog,
-    wake: Callable[[Machine], None],
-    shut_down: Callable[[Machine], None],
-    reboot: Callable[[Machine], None],
-    run_cluster: Callable[[Cluster, str], None],
+    # The str is the action's source for the event log ("manual", "api:<key name>").
+    wake: Callable[[Machine, str], None],
+    shut_down: Callable[[Machine, str], None],
+    reboot: Callable[[Machine, str], None],
+    run_cluster: Callable[[Cluster, str, str], None],
     rebuild_jobs: Callable[[], None],
 ) -> Flask:
     app = Flask(__name__)
     auth = AuthStore(Path(config_path).parent / "auth.yaml")
+    instance_id = load_instance_id(Path(config_path).parent / "instance_id")
     # Persisted, so logins survive restarts and redeploys.
     app.secret_key = auth.session_secret()
     app.config.update(
@@ -105,10 +111,10 @@ def create_app(
         session.permanent = True
         session["auth"] = auth.password_fingerprint()
 
-    def api_key_ok() -> bool:
+    def request_api_key() -> ApiKey | None:
         header = request.headers.get("Authorization", "")
         scheme, _, key = header.partition(" ")
-        return scheme.lower() == "bearer" and auth.check_api_key(key.strip())
+        return auth.check_api_key(key.strip()) if scheme.lower() == "bearer" else None
 
     def same_origin() -> bool:
         origin = request.headers.get("Origin")
@@ -125,12 +131,18 @@ def create_app(
         if endpoint is None or endpoint in _PUBLIC_ENDPOINTS:
             return None
         if request.path.startswith("/api/"):
-            if logged_in() or api_key_ok():
+            g.api_key = None
+            if logged_in():
                 return None
-            return api_response(
-                {"error": "API key required: create one under Settings and send it as 'Authorization: Bearer <key>'"},
-                401,
-            )
+            g.api_key = request_api_key()
+            if g.api_key is None:
+                return api_response(
+                    {"error": "API key required: create one under Settings and send it as 'Authorization: Bearer <key>'"},
+                    401,
+                )
+            if request.method not in ("GET", "HEAD") and not g.api_key.can_control:
+                return api_response({"error": f"API key '{g.api_key.name}' is read-only"}, 403)
+            return None
         if not auth.has_password:
             return redirect(url_for("setup"))
         if not logged_in():
@@ -465,6 +477,8 @@ def create_app(
         category, template = _ACTION_MESSAGES.get((record.action, record.result), ("success", "Done"))
         flash(template.format(name=machine.name), category)
 
+    machine_actions = {"on": wake, "off": shut_down, "reboot": reboot}
+
     # --- Overview ---
 
     @app.route("/")
@@ -585,12 +599,8 @@ def create_app(
         machine = machine_or_redirect(key)
         if machine is None:
             return redirect(url_for("index"))
-        if action == "on":
-            wake(machine)
-        elif action == "off":
-            shut_down(machine)
-        elif action == "reboot":
-            reboot(machine)
+        if action in machine_actions:
+            machine_actions[action](machine, "manual")
         flash_action_result(machine)
         return redirect_back(url_for("machine_detail", key=key))
 
@@ -712,7 +722,7 @@ def create_app(
         if cluster is None:
             return redirect(url_for("index"))
         if action in VALID_ACTIONS:
-            run_cluster(cluster, action)
+            run_cluster(cluster, action, "manual")
             verb = "Waking" if action == "on" else "Shutting down"
             flash(f"{verb} {len(cluster.members)} machine(s) one after another — see the event log", "success")
         return redirect_back(url_for("cluster_detail", key=key))
@@ -747,15 +757,17 @@ def create_app(
 
     # --- Import / export ---
 
-    def render_settings(new_api_key: str | None = None):
+    def render_settings(new_api_key: str | None = None, new_api_key_name: str | None = None):
         return render_template(
             "config.html",
             env_active=env_config_active(),
             min_length=MIN_PASSWORD_LENGTH,
-            has_api_key=auth.has_api_key,
-            api_key_created=auth.api_key_created,
+            api_keys=auth.api_keys,
             new_api_key=new_api_key,
+            new_api_key_name=new_api_key_name,
             general=_general_settings_values(config),
+            scope_labels=_SCOPE_LABELS,
+            max_key_name=MAX_API_KEY_NAME_LENGTH,
         )
 
     @app.route("/config")
@@ -784,18 +796,26 @@ def create_app(
 
     @app.post("/settings/api-key")
     def settings_api_key():
-        replaced = auth.has_api_key
-        key = auth.create_api_key()
-        _log(None, "API key %s", "regenerated" if replaced else "created")
+        name = request.form.get("name", "")
+        scope = request.form.get("scope", "read")
+        try:
+            key = auth.create_api_key(name, scope)
+        except ValueError as exc:
+            flash(str(exc), "error")
+            return redirect(url_for("config_page"))
+        _log(None, "API key '%s' created (%s)", name.strip(), _SCOPE_LABELS[scope].lower())
         # Rendered directly instead of redirecting, so the key never passes through the
         # session cookie; it's shown this once only.
-        return render_settings(new_api_key=key)
+        return render_settings(new_api_key=key, new_api_key_name=name.strip())
 
-    @app.post("/settings/api-key/delete")
-    def settings_api_key_delete():
-        auth.revoke_api_key()
-        _log(None, "API key revoked")
-        flash("API key revoked. The status API now only answers logged-in browsers.", "success")
+    @app.post("/settings/api-key/<key_id>/delete")
+    def settings_api_key_delete(key_id: str):
+        revoked = auth.revoke_api_key(key_id)
+        if revoked is None:
+            flash("API key not found", "error")
+        else:
+            _log(None, "API key '%s' revoked", revoked.name)
+            flash(f"API key '{revoked.name}' revoked. Services using it stop working.", "success")
         return redirect(url_for("config_page"))
 
     @app.post("/settings/general")
@@ -868,7 +888,7 @@ def create_app(
         )
         return redirect(url_for("index"))
 
-    # --- Read-only status API for other services (Home Assistant, Uptime Kuma, scripts) ---
+    # --- JSON API for other services (Home Assistant, Uptime Kuma, scripts), see docs/api.md ---
 
     def api_response(payload: dict, status: int = 200) -> Response:
         response = jsonify(payload)
@@ -902,12 +922,68 @@ def create_app(
         status = ping_all([m for m in config.machines if m.key in cluster.members])
         return api_response(cluster_json(cluster, status))
 
+    def api_source() -> str:
+        return f"api:{g.api_key.name}" if g.api_key is not None else "manual"
+
+    @app.route("/api/info")
+    def api_info():
+        key: ApiKey | None = g.api_key
+        return api_response({
+            "instance_id": instance_id,
+            "status_timeout_seconds": config.status_check.timeout_seconds,
+            "access": key.scope if key is not None else "control",
+            "key_name": key.name if key is not None else None,
+        })
+
+    @app.post("/api/machines/<key>/action/<action>")
+    def api_machine_action(key: str, action: str):
+        machine = get_machine(key)
+        if machine is None:
+            return api_response({"error": f"Machine '{key}' not found"}, 404)
+        if action not in machine_actions:
+            return api_response({"error": f"Unknown action '{action}', allowed: {sorted(machine_actions)}"}, 400)
+        if action != "on" and machine.shutdown is None:
+            return api_response({"error": f"'{machine.name}' has no shutdown method configured"}, 409)
+        source = api_source()
+        _log(machine.key, "'%s': %s requested via %s", machine.name, _ACTION_NOUNS[action], source)
+        machine_actions[action](machine, source)
+        payload = last_action_json(machine.key)
+        # 502: the request was fine, but Proxmox or SSH failed (the reason is in "detail").
+        return api_response(payload, 502 if payload is not None and payload["result"] == "error" else 200)
+
+    @app.post("/api/clusters/<key>/action/<action>")
+    def api_cluster_action(key: str, action: str):
+        cluster = get_cluster(key)
+        if cluster is None:
+            return api_response({"error": f"Cluster '{key}' not found"}, 404)
+        if action not in VALID_ACTIONS:
+            return api_response({"error": f"Unknown action '{action}', allowed: {sorted(VALID_ACTIONS)}"}, 400)
+        source = api_source()
+        _log(owner_event_key(cluster), "Cluster '%s': %s requested via %s", cluster.name, _ACTION_NOUNS[action], source)
+        run_cluster(cluster, action, source)
+        # The sequence runs in the background; its outcome ends up in the cluster's last_action.
+        return api_response(last_action_json(owner_event_key(cluster)), 202)
+
     @app.errorhandler(413)
     def upload_too_large(_error):
         flash("Import failed, nothing was changed: the file is larger than 1 MB", "error")
         return redirect(url_for("config_page"))
 
     return app
+
+
+def load_instance_id(path: Path) -> str:
+    """Random ID of this daemon, created once, so clients like Home Assistant recognise it
+    again after its address changes. A file of its own: not part of config import/export
+    (another node would get the same ID), and not reset along with the login (auth.yaml)."""
+    if path.exists():
+        existing = path.read_text(encoding="utf-8").strip()
+        if existing:
+            return existing
+    new_id = uuid.uuid4().hex
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(new_id + "\n", encoding="utf-8")
+    return new_id
 
 
 def _format_duration(delta: timedelta) -> str:
