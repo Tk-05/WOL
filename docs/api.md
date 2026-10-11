@@ -12,6 +12,7 @@ query the status of machines and clusters, and, with a control key, switch them.
 | `GET /api/clusters/<key>` | one cluster |
 | `POST /api/machines/<key>/action/<on\|off\|reboot>` | wakes, shuts down or reboots a machine, see [Actions](#actions) |
 | `POST /api/clusters/<key>/action/<on\|off>` | starts a cluster's wake or shutdown sequence |
+| `GET /api/events` | a stream of change notifications, see [Events](#events) |
 
 An unknown key returns HTTP 404 with `{"error": "..."}`.
 
@@ -103,6 +104,57 @@ can take minutes, so it answers at once with HTTP 202 and the cluster's `last_ac
 ```sh
 curl -X POST -H "Authorization: Bearer <key>" http://<pi-ip>:9090/api/machines/pve/action/on
 ```
+
+## Events
+
+`GET /api/events` keeps the connection open and sends a
+[server-sent event](https://html.spec.whatwg.org/multipage/server-sent-events.html) whenever
+something changes, so clients don't have to poll fast to notice. A read-only key is
+enough.
+
+```
+event: hello
+data: {"type": "hello", "instance_id": "3f1c0d9a6b6e4c4f9a1e2b7d5c8a9f01"}
+
+event: action
+data: {"type": "action", "kind": "machine", "key": "pve", "action": "on", "result": "ok"}
+
+event: action
+data: {"type": "action", "kind": "cluster", "key": "homelab", "action": "off", "result": "started"}
+
+event: state
+data: {"type": "state", "kind": "machine", "key": "pve", "online": false}
+
+event: config
+data: {"type": "config"}
+
+: keepalive
+```
+
+- `hello`: sent once when the stream opens.
+- `action`: an action was recorded, the same moments a `last_action` changes (wake,
+  shutdown, reboot, skipped schedule runs, cluster sequences starting and ending).
+- `state`: the daemon noticed a machine come up or go down. The daemon itself only
+  checks every few minutes (and after its own actions), so keep polling the status for
+  faster updates.
+- `config`: machines, clusters, schedules or settings were changed or imported.
+- `: keepalive` comment lines come every 15 seconds while nothing happens.
+
+Events only say *what* changed; fetch the details from the status endpoints. A client
+that falls far behind can miss events, and at most 10 streams can be open at once
+(HTTP 503 beyond that), so treat events as a hint to refresh, not as the only source.
+
+```sh
+curl -N -H "Authorization: Bearer <key>" http://<pi-ip>:9090/api/events
+```
+
+## Network discovery
+
+The daemon announces itself on the LAN via mDNS/zeroconf as `_wol-daemon._tcp`, with its
+instance ID in the TXT record `id`, so Home Assistant offers to set it up by itself.
+Set `WOL_DISCOVERY=false` to turn that off. It needs host networking (as in
+`docker-compose.yml`) and announces the address of the interface the default route goes
+out of.
 
 ## Machine
 

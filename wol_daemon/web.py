@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import queue
 import re
 import time
 import uuid
@@ -38,6 +39,7 @@ from .config import (
     save_config,
 )
 from .eventlog import EventLog
+from .events import KEEPALIVE_SECONDS, EventBus, format_sse
 from .scheduler import cluster_job_prefix, machine_job_prefix, owner_event_key
 from .status import is_host_up
 
@@ -88,10 +90,11 @@ def create_app(
     reboot: Callable[[Machine, str], None],
     run_cluster: Callable[[Cluster, str, str], None],
     rebuild_jobs: Callable[[], None],
+    events: EventBus,
+    instance_id: str,
 ) -> Flask:
     app = Flask(__name__)
     auth = AuthStore(Path(config_path).parent / "auth.yaml")
-    instance_id = load_instance_id(Path(config_path).parent / "instance_id")
     # Persisted, so logins survive restarts and redeploys.
     app.secret_key = auth.session_secret()
     app.config.update(
@@ -393,6 +396,11 @@ def create_app(
 
     # --- Schedule editing, shared by machines and clusters ---
 
+    def persist() -> None:
+        """Saves the configuration and tells /api/events listeners it changed."""
+        save_config(config, config_path)
+        events.config_changed()
+
     def add_rule(owner: Machine | Cluster, back: str):
         try:
             rule = _rule_from_form(request.form)
@@ -400,7 +408,7 @@ def create_app(
             flash(str(exc), "error")
             return redirect(back)
         owner.schedule.append(rule)
-        save_config(config, config_path)
+        persist()
         rebuild_jobs()
         _log(owner_event_key(owner), "'%s': rule '%s' added (%s)", owner.name, rule.name, _rule_summary(rule))
         flash("Rule added", "success")
@@ -416,7 +424,7 @@ def create_app(
             flash(str(exc), "error")
             return redirect(back)
         owner.schedule[index] = rule
-        save_config(config, config_path)
+        persist()
         rebuild_jobs()
         _log(owner_event_key(owner), "'%s': rule '%s' changed (%s)", owner.name, rule.name, _rule_summary(rule))
         flash("Rule saved", "success")
@@ -425,7 +433,7 @@ def create_app(
     def delete_rule(owner: Machine | Cluster, index: int, back: str):
         if 0 <= index < len(owner.schedule):
             rule = owner.schedule.pop(index)
-            save_config(config, config_path)
+            persist()
             rebuild_jobs()
             _log(owner_event_key(owner), "'%s': rule '%s' deleted", owner.name, rule.name)
             flash("Rule deleted", "success")
@@ -448,7 +456,7 @@ def create_app(
             rule.skip_date = job.next_run_time.date().isoformat()
             _log(owner_event_key(owner), "'%s': rule '%s' will be skipped on %s", owner.name, rule.name, rule.skip_date)
             flash(f"Next run of '{rule.name}' will be skipped", "success")
-        save_config(config, config_path)
+        persist()
         return redirect(back)
 
     def machine_or_redirect(key: str) -> Machine | None:
@@ -505,7 +513,7 @@ def create_app(
             flash(str(exc), "error")
             return redirect(url_for("machine_add"))
         config.machines.append(machine)
-        save_config(config, config_path)
+        persist()
         rebuild_jobs()
         _log(machine.key, "Machine '%s' added", machine.name)
         flash(f"Machine '{machine.name}' added", "success")
@@ -521,7 +529,7 @@ def create_app(
             if key in cluster.members:
                 cluster.members.remove(key)
                 _log(owner_event_key(cluster), "'%s' removed from cluster '%s' (machine deleted)", machine.name, cluster.name)
-        save_config(config, config_path)
+        persist()
         rebuild_jobs()
         event_log.forget(key)
         _log(None, "Machine '%s' deleted", machine.name)
@@ -588,7 +596,7 @@ def create_app(
         machine.mac_address = mac_address
         machine.ip_address = ip_address
         machine.shutdown = shutdown
-        save_config(config, config_path)
+        persist()
         if changed:
             _log(machine.key, "'%s': settings changed (%s)", machine.name, ", ".join(changed))
         flash(f"Machine '{machine.name}' saved", "success")
@@ -656,7 +664,7 @@ def create_app(
             key=key, name=name, members=members, delay_seconds=delay, schedule=[], max_wait_seconds=max_wait
         )
         config.clusters.append(cluster)
-        save_config(config, config_path)
+        persist()
         _log(owner_event_key(cluster), "Cluster '%s' added (%s)", cluster.name, _cluster_summary_text(cluster, config))
         flash(f"Cluster '{cluster.name}' added", "success")
         return redirect(url_for("cluster_detail", key=cluster.key))
@@ -697,7 +705,7 @@ def create_app(
         cluster.members = members
         cluster.delay_seconds = delay
         cluster.max_wait_seconds = max_wait
-        save_config(config, config_path)
+        persist()
         if (cluster.name, cluster.members, cluster.delay_seconds, cluster.max_wait_seconds) != before:
             _log(owner_event_key(cluster), "Cluster '%s' changed (%s)", cluster.name, _cluster_summary_text(cluster, config))
         flash("Cluster saved", "success")
@@ -709,7 +717,7 @@ def create_app(
         if cluster is None:
             return redirect(url_for("index"))
         config.clusters.remove(cluster)
-        save_config(config, config_path)
+        persist()
         rebuild_jobs()
         event_log.forget(owner_event_key(cluster))
         _log(None, "Cluster '%s' deleted", cluster.name)
@@ -831,7 +839,7 @@ def create_app(
         config.status_check = status_check
         config.wol = wol
         config.notifications = notifications
-        save_config(config, config_path)
+        persist()
         _log(None, "General settings changed")
         flash("Settings saved", "success")
         return redirect(url_for("config_page"))
@@ -879,6 +887,7 @@ def create_app(
         config.wol = reloaded.wol
         config.notifications = reloaded.notifications
         rebuild_jobs()
+        events.config_changed()
         _log(None, "Configuration imported from '%s': %d machine(s), %d cluster(s)",
              upload.filename, len(config.machines), len(config.clusters))
         flash(
@@ -934,6 +943,31 @@ def create_app(
             "access": key.scope if key is not None else "control",
             "key_name": key.name if key is not None else None,
         })
+
+    @app.route("/api/events")
+    def api_events():
+        subscriber = events.subscribe()
+        if subscriber is None:
+            return api_response({"error": "Too many event streams open"}, 503)
+
+        def stream():
+            try:
+                yield format_sse({"type": "hello", "instance_id": instance_id})
+                while True:
+                    try:
+                        event = subscriber.get(timeout=KEEPALIVE_SECONDS)
+                    except queue.Empty:
+                        yield ": keepalive\n\n"
+                        continue
+                    yield format_sse(event)
+            finally:
+                # Runs once writing to a disconnected client fails.
+                events.unsubscribe(subscriber)
+
+        response = Response(stream(), mimetype="text/event-stream")
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["X-Accel-Buffering"] = "no"  # don't let a reverse proxy hold events back
+        return response
 
     @app.post("/api/machines/<key>/action/<action>")
     def api_machine_action(key: str, action: str):

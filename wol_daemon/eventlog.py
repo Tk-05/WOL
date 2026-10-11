@@ -10,6 +10,8 @@ from datetime import datetime
 from pathlib import Path
 from threading import Lock
 
+from .events import EventBus
+
 # Rewrite the file down to what's actually kept after this many appended records.
 COMPACT_EVERY = 1000
 
@@ -53,8 +55,15 @@ class EventLog:
     With a path, everything is also appended to a JSON-lines file and read back on start, so
     it survives restarts. The file is periodically rewritten to just what's kept in memory."""
 
-    def __init__(self, max_events: int = 200, max_per_owner: int = 50, path: Path | None = None):
+    def __init__(
+        self,
+        max_events: int = 200,
+        max_per_owner: int = 50,
+        path: Path | None = None,
+        events: EventBus | None = None,
+    ):
         self._lock = Lock()
+        self._bus = events
         self._events: deque[_Event] = deque(maxlen=max_events)
         self._owner_events: dict[str, deque[_Event]] = {}
         self._max_per_owner = max_per_owner
@@ -81,6 +90,8 @@ class EventLog:
         with self._lock:
             self._last_actions[machine_key] = record
             self._append(_action_to_dict(record))
+        if self._bus is not None:
+            self._bus.action_recorded(machine_key, action, result)
 
     def last_action_for(self, machine_key: str) -> ActionRecord | None:
         with self._lock:
@@ -98,6 +109,8 @@ class EventLog:
             sample = StateSample(datetime.now(), up)
             self._state_history.setdefault(machine_key, deque(maxlen=STATE_HISTORY_LIMIT)).append(sample)
             self._append(_state_to_dict(machine_key, sample))
+        if self._bus is not None:
+            self._bus.state_changed(machine_key, up)
 
     def state_history_for(self, machine_key: str) -> list[StateSample]:
         """Oldest first. Only the transitions themselves - assume the state holds between two

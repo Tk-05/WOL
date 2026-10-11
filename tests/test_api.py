@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from .conftest import bearer
+from .conftest import INSTANCE_ID, bearer
 
 
 def test_api_needs_a_key(client):
@@ -42,7 +42,7 @@ def test_info(client, make_key):
     key = make_key("Home Assistant", "control")
     client.post("/logout")
     info = client.get("/api/info", headers=bearer(key)).get_json()
-    assert len(info["instance_id"]) == 32
+    assert info["instance_id"] == INSTANCE_ID
     assert info["status_timeout_seconds"] == 5
     assert info["access"] == "control"
     assert info["key_name"] == "Home Assistant"
