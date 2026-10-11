@@ -174,8 +174,12 @@ curl -X POST -H "Authorization: Bearer <key>" http://<pi-ip>:9090/api/machines/p
 curl -H "Authorization: Bearer <key>" http://<pi-ip>:9090/api/machines/pve
 ```
 
-**Home Assistant** (`configuration.yaml`, with a read-only key in `secrets.yaml` as
-`wol_api_auth: "Bearer <key>"`)
+**Home Assistant**: the [WOL Daemon integration](https://github.com/Tk-05/ha-wol-daemon)
+(installable through HACS) sets up every machine and cluster as a device, with status,
+power switch and wake/shutdown/reboot buttons; give it a key with Control access.
+
+Without it, plain REST sensors work too (`configuration.yaml`, with a read-only key in
+`secrets.yaml` as `wol_api_auth: "Bearer <key>"`):
 
 ```yaml
 rest:
