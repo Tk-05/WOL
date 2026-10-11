@@ -969,6 +969,39 @@ def create_app(
         response.headers["X-Accel-Buffering"] = "no"  # don't let a reverse proxy hold events back
         return response
 
+    def skip_next_run(owner: Machine | Cluster, prefix: str, skip: bool):
+        """Skips (or un-skips) whichever of the owner's rules runs next, the run that
+        next_action shows."""
+        found = next_run(prefix, owner.schedule)
+        if found is None or found[1] is None:
+            return api_response({"error": f"'{owner.name}' has no scheduled run coming up"}, 409)
+        job, rule, will_skip = found
+        event_key = owner_event_key(owner)
+        if skip and not will_skip:
+            rule.skip_date = job.next_run_time.date().isoformat()
+            _log(event_key, "'%s': rule '%s' will be skipped on %s (via %s)", owner.name, rule.name,
+                 rule.skip_date, api_source())
+            persist()
+        elif not skip and will_skip:
+            rule.skip_date = None
+            _log(event_key, "'%s': skip of rule '%s' cancelled (via %s)", owner.name, rule.name, api_source())
+            persist()
+        return api_response(next_action_json(prefix, owner.schedule))
+
+    @app.route("/api/machines/<key>/skip-next", methods=["POST", "DELETE"])
+    def api_machine_skip_next(key: str):
+        machine = get_machine(key)
+        if machine is None:
+            return api_response({"error": f"Machine '{key}' not found"}, 404)
+        return skip_next_run(machine, machine_job_prefix(machine), request.method == "POST")
+
+    @app.route("/api/clusters/<key>/skip-next", methods=["POST", "DELETE"])
+    def api_cluster_skip_next(key: str):
+        cluster = get_cluster(key)
+        if cluster is None:
+            return api_response({"error": f"Cluster '{key}' not found"}, 404)
+        return skip_next_run(cluster, cluster_job_prefix(cluster), request.method == "POST")
+
     @app.post("/api/machines/<key>/action/<action>")
     def api_machine_action(key: str, action: str):
         machine = get_machine(key)
