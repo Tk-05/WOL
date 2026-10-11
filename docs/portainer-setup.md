@@ -239,6 +239,10 @@ cluster as JSON, e.g. `http://<host>:9090/api/machines/<key>`, with an API key
 from **Settings**; a key with **Control** access can also wake, shut down and reboot
 them. See [api.md](api.md).
 
+The daemon also announces itself on the LAN (mDNS/zeroconf), so Home Assistant offers to
+set it up by itself under **Settings → Devices & services → Discovered**. To turn that off,
+set `WOL_DISCOVERY` to `false` in the stack's environment variables.
+
 ## Export and import
 
 **Settings** in the top navigation downloads the complete configuration

@@ -17,10 +17,13 @@ from .config import (
     ProxmoxShutdown,
     ScheduleRule,
     SshShutdown,
+    _bool_env,
     load_config,
     save_config,
 )
+from .discovery import Discovery
 from .eventlog import EventLog, EventLogHandler
+from .events import EventBus
 from .magicpacket import send_magic_packet
 from .notify import send_notification
 from .proxmox import ProxmoxClient
@@ -28,10 +31,12 @@ from .scheduler import build_scheduler, owner_event_key, update_jobs
 from .ssh_shutdown import SshClient, SshShutdownError
 from .status import is_host_up
 from .watchdog import schedule_wake_check
-from .web import create_app
+from .web import create_app, load_instance_id
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger("wol_daemon")
+
+PORT = 9090
 
 
 def turn_on(
@@ -280,7 +285,9 @@ def on_rule_skipped(
 def main() -> None:
     config_path = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(__file__).resolve().parent.parent / "config.yaml"
     config = load_config(config_path)
-    event_log = EventLog(path=config_path.parent / "events.jsonl")
+    events = EventBus()
+    event_log = EventLog(path=config_path.parent / "events.jsonl", events=events)
+    instance_id = load_instance_id(config_path.parent / "instance_id")
 
     event_handler = EventLogHandler(event_log)
     event_handler.setFormatter(logging.Formatter("%(message)s"))
@@ -312,17 +319,22 @@ def main() -> None:
         reboot=lambda m, source: reboot_machine(config, m, event_log, source),
         run_cluster=lambda c, action, source: cluster_action(config, c, action, event_log, scheduler, source),
         rebuild_jobs=lambda: update_jobs(scheduler, config, **scheduled_callbacks),
+        events=events,
+        instance_id=instance_id,
     )
+    discovery = Discovery(instance_id, PORT) if _bool_env("WOL_DISCOVERY", True) else None
 
     def handle_shutdown(signum, frame):
         logger.info("Shutting down WOL daemon...")
+        if discovery is not None:
+            discovery.close()
         scheduler.shutdown()
         sys.exit(0)
 
     signal.signal(signal.SIGTERM, handle_shutdown)
     signal.signal(signal.SIGINT, handle_shutdown)
 
-    app.run(host="0.0.0.0", port=9090)
+    app.run(host="0.0.0.0", port=PORT)
 
 
 if __name__ == "__main__":

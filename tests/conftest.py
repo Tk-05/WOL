@@ -16,9 +16,11 @@ from wol_daemon.config import (
     WolConfig,
 )
 from wol_daemon.eventlog import EventLog
+from wol_daemon.events import EventBus
 from wol_daemon.scheduler import owner_event_key
 
 PASSWORD = "correct horse"
+INSTANCE_ID = "0123456789abcdef0123456789abcdef"
 
 
 @dataclass
@@ -44,7 +46,12 @@ def online(monkeypatch) -> set[str]:
 
 
 @pytest.fixture
-def app(tmp_path, monkeypatch, calls, online):
+def events() -> EventBus:
+    return EventBus()
+
+
+@pytest.fixture
+def app(tmp_path, monkeypatch, calls, online, events):
     for name in ("WOL_PROXMOX_HOST", "WOL_TARGET_MAC", "WOL_TARGET_IP"):
         monkeypatch.delenv(name, raising=False)
     config = AppConfig(
@@ -63,7 +70,7 @@ def app(tmp_path, monkeypatch, calls, online):
         notifications=NotificationConfig(),
         clusters=[Cluster(key="homelab", name="Homelab", members=["nas", "tv"], delay_seconds=0, schedule=[])],
     )
-    event_log = EventLog()
+    event_log = EventLog(events=events)
 
     def machine_action(action: str):
         def run(machine: Machine, source: str) -> None:
@@ -86,6 +93,8 @@ def app(tmp_path, monkeypatch, calls, online):
         reboot=machine_action("reboot"),
         run_cluster=run_cluster,
         rebuild_jobs=lambda: None,
+        events=events,
+        instance_id=INSTANCE_ID,
     )
     app.config.update(TESTING=True)
     return app

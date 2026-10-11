@@ -34,6 +34,8 @@ services:
       WOL_NTFY_URL: "${WOL_NTFY_URL:-}"
       WOL_TELEGRAM_BOT_TOKEN: "${WOL_TELEGRAM_BOT_TOKEN:-}"
       WOL_TELEGRAM_CHAT_ID: "${WOL_TELEGRAM_CHAT_ID:-}"
+      # Announce the daemon on the LAN (mDNS), so Home Assistant discovers it by itself.
+      WOL_DISCOVERY: "${WOL_DISCOVERY:-true}"
     volumes:
       - wol-config:/config
 
